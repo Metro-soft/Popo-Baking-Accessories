@@ -26,14 +26,21 @@ const AuthController = {
 
             // Generate Token
             const token = jwt.sign(
-                { userId: user.id, role: user.role, branchId: user.branch_id },
+                { userId: user.id, email: user.email, role: user.role, branchId: user.branch_id },
                 JWT_SECRET,
-                { expiresIn: '24h' }
+                { expiresIn: '12h' }
             );
 
+            // Audit Login
+            await createAuditLog(user.id, 'LOGIN', `User ${user.email} logged in.`);
+
             // Return user info (excluding password)
-            delete user.password_hash;
-            res.json({ token, user });
+            // delete user.password_hash; // This line is no longer needed as we construct a new user object
+            res.json({
+                message: 'Login successful',
+                token,
+                user: { id: user.id, username: user.username, role: user.role }
+            });
 
         } catch (error) {
             console.error('Login Error:', error);

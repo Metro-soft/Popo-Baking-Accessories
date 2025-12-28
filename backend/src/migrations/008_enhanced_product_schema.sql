@@ -1,0 +1,6 @@
+ALTER TABLE products 
+ADD COLUMN cost_price DECIMAL(10, 2) DEFAULT 0.00,
+ADD COLUMN category VARCHAR(100),
+ADD COLUMN wholesale_price DECIMAL(10, 2),
+ADD COLUMN min_wholesale_qty INT DEFAULT 0,
+ADD COLUMN color VARCHAR(50);

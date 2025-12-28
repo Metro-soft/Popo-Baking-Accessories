@@ -69,8 +69,7 @@ exports.processTransaction = async (req, res) => {
 
                 if (quantity < 0) {
                     // RETURN: INCREASE STOCK
-                    // We add the absolute value of quantity back to ... ideally the latest batch or a "Generic Return Batch".
-                    // For MVP: Find the most recent batch and ADD to it.
+                    const absQty = Math.abs(quantity);
                     const latestBatch = await client.query(
                         `SELECT id FROM inventory_batches WHERE product_id = $1 ORDER BY received_at DESC LIMIT 1`,
                         [productId]
@@ -79,13 +78,18 @@ exports.processTransaction = async (req, res) => {
                     if (latestBatch.rows.length > 0) {
                         await client.query(
                             `UPDATE inventory_batches SET quantity_remaining = quantity_remaining + $1 WHERE id = $2`,
-                            [Math.abs(quantity), latestBatch.rows[0].id]
+                            [absQty, latestBatch.rows[0].id]
                         );
                     } else {
-                        // Edge case: Return item we have NO record of ever having? 
-                        // Maybe create a dummy batch? Or just fail? Let's Log strict warning.
                         console.warn(`[RETURN] No batch found for returned product ${productId}`);
                     }
+
+                    // [NEW] Log Return
+                    await client.query(
+                        `INSERT INTO stock_movements (product_id, type, quantity, reason, reference_id)
+                         VALUES ($1, 'return', $2, 'Order Return', $3)`,
+                        [productId, absQty, orderId]
+                    );
 
                 } else {
                     // SALE: DECREASE STOCK (Existing Logic)
@@ -113,10 +117,18 @@ exports.processTransaction = async (req, res) => {
                     }
 
                     if (qtyToDeduct > 0) {
-                        // Warning: Negative Stock or Partial Fulfillment. For MVP, we allow it but log it.
                         console.warn(`[STOCK] Product ${productId} went negative by ${qtyToDeduct}`);
                     }
-                } // End of Retail Sale Logic
+
+                    // [NEW] Log Sale (Negative Quantity)
+                    // We log the FULL quantity as sold, even if partially deducted (accounting wise)
+                    // or strictly what was deducted? Typically sold amount.
+                    await client.query(
+                        `INSERT INTO stock_movements (product_id, type, quantity, reason, reference_id)
+                         VALUES ($1, 'sale', $2, 'Order Sale', $3)`,
+                        [productId, -quantity, orderId]
+                    );
+                }
             } else if (type === 'asset_rental') {
                 // UPDATE ASSET STATUS
                 // Note: We need a rental_assets table for serials.

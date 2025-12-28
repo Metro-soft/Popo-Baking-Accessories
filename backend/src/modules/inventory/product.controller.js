@@ -1,16 +1,27 @@
 const db = require('../../config/db');
 
 exports.createProduct = async (req, res) => {
-    const { name, sku, type, baseSellingPrice, rentalDeposit, reorderLevel } = req.body;
+    const {
+        name, sku, type, baseSellingPrice, rentalDeposit, reorderLevel,
+        costPrice, category, wholesalePrice, minWholesaleQty, color
+    } = req.body;
 
     // 1. Validation
-    if (!name || !sku || !type || baseSellingPrice === undefined) {
+    if (!name || !type || baseSellingPrice === undefined) {
         return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    let productSku = sku;
+    if (!productSku || productSku.trim() === '') {
+        // Auto-generate SKU
+        const timestamp = Date.now().toString().slice(-6);
+        const random = Math.floor(1000 + Math.random() * 9000).toString().slice(-3);
+        productSku = `POPO-${timestamp}${random}`;
     }
 
     // Check if SKU already exists
     try {
-        const skuCheck = await db.query('SELECT id FROM products WHERE sku = $1', [sku]);
+        const skuCheck = await db.query('SELECT id FROM products WHERE sku = $1', [productSku]);
         if (skuCheck.rows.length > 0) {
             return res.status(409).json({ error: 'Product with this SKU already exists' });
         }
@@ -30,29 +41,32 @@ exports.createProduct = async (req, res) => {
         await client.query('BEGIN');
 
         // 3. Insert Product
-        // Note: Mapping frontend camelCase to DB snake_case
         const insertQuery = `
       INSERT INTO products (
-        name, sku, type, description, base_selling_price, rental_deposit_amount, reorder_level
+        name, sku, type, description, base_selling_price, rental_deposit_amount, reorder_level,
+        cost_price, category, wholesale_price, min_wholesale_qty, color, images
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
       RETURNING *
     `;
 
-        // Use default description if empty
         const description = req.body.description || '';
-
-        // Rental deposit is 0 for retail, or provided value for asset
         const depositValue = type === 'asset_rental' ? rentalDeposit : 0.00;
 
         const values = [
             name,
-            sku,
+            productSku,
             type,
             description,
             baseSellingPrice,
             depositValue,
-            reorderLevel || 10
+            reorderLevel || 10,
+            costPrice || 0.00,
+            category || 'General',
+            wholesalePrice || null,
+            minWholesaleQty || 0,
+            color || null,
+            req.body.images || []
         ];
 
         const result = await client.query(insertQuery, values);
@@ -81,10 +95,130 @@ exports.createProduct = async (req, res) => {
 
 exports.getProducts = async (req, res) => {
     try {
-        const result = await db.query('SELECT * FROM products ORDER BY created_at DESC');
+        const result = await db.query(`
+            SELECT p.*, COALESCE(SUM(ib.quantity_remaining), 0) as stock_level
+            FROM products p
+            LEFT JOIN inventory_batches ib ON p.id = ib.product_id
+            GROUP BY p.id
+            ORDER BY p.created_at DESC
+        `);
+        // Note: stock_level comes as string from COUNT/SUM usually, convert in frontend or cast here?
+        // JS driver often returns BigInt as string. Parsing in frontend map is safer.
         res.json(result.rows);
     } catch (err) {
         console.error('Get Products Error:', err);
         res.status(500).json({ error: 'Internal Server Error' });
+    }
+};
+
+exports.getProductById = async (req, res) => {
+    const { id } = req.params;
+    try {
+        const result = await db.query(`
+            SELECT p.*, COALESCE(SUM(ib.quantity_remaining), 0) as stock_level
+            FROM products p
+            LEFT JOIN inventory_batches ib ON p.id = ib.product_id
+            WHERE p.id = $1
+            GROUP BY p.id
+        `, [id]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'Product not found' });
+        }
+        res.json(result.rows[0]);
+    } catch (err) {
+        console.error('Get Product By ID Error:', err);
+        res.status(500).json({ error: 'Database error' });
+    }
+};
+
+exports.getProductByName = async (req, res) => {
+    const { name } = req.query;
+    if (!name) return res.status(400).json({ error: 'Name required' });
+
+    try {
+        const result = await db.query(
+            'SELECT * FROM products WHERE LOWER(name) = LOWER($1) ORDER BY created_at DESC LIMIT 1',
+            [name]
+        );
+        if (result.rows.length > 0) {
+            res.json({ found: true, product: result.rows[0] });
+        } else {
+            res.json({ found: false });
+        }
+    } catch (err) {
+        console.error('Check Name Error:', err);
+        res.status(500).json({ error: 'Database error' });
+    }
+};
+
+exports.updateProduct = async (req, res) => {
+    const { id } = req.params;
+    const {
+        name, type, baseSellingPrice, rentalDeposit, reorderLevel,
+        costPrice, category, wholesalePrice, minWholesaleQty, color, description, images
+    } = req.body;
+
+    try {
+        const query = `
+            UPDATE products 
+            SET name = $1, type = $2, base_selling_price = $3, rental_deposit_amount = $4, 
+                reorder_level = $5, cost_price = $6, category = $7, wholesale_price = $8, 
+                min_wholesale_qty = $9, color = $10, description = $11, images = $12
+            WHERE id = $13
+            RETURNING *
+        `;
+        const values = [
+            name, type, baseSellingPrice, rentalDeposit || 0, reorderLevel,
+            costPrice || 0, category, wholesalePrice, minWholesaleQty, color, description || '',
+            images || [], id
+        ];
+
+        const result = await db.query(query, values);
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'Product not found' });
+        }
+        res.json(result.rows[0]);
+    } catch (err) {
+        console.error('Update Product Error:', err);
+        res.status(500).json({ error: 'Database error' });
+    }
+};
+
+exports.deleteProduct = async (req, res) => {
+    const { id } = req.params;
+    try {
+        // Warning: This might fail if foreign keys (inventory_batches) exist. 
+        // We should ideally soft delete or check cascade. 
+        // For now, hard delete is requested to 'fix mistakes'.
+        const result = await db.query('DELETE FROM products WHERE id = $1 RETURNING id', [id]);
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'Product not found' });
+        }
+        res.json({ message: 'Product deleted' });
+    } catch (err) {
+        console.error('Delete Product Error:', err);
+        if (err.code === '23503') { // Foreign key violation
+            return res.status(400).json({ error: 'Cannot delete product with existing stock history.' });
+        }
+        res.status(500).json({ error: 'Database error' });
+    }
+};
+
+exports.getStockHistory = async (req, res) => {
+    const { id } = req.params;
+    try {
+        // Fetch movements
+        const result = await db.query(`
+            SELECT * FROM stock_movements 
+            WHERE product_id = $1 
+            ORDER BY created_at DESC 
+            LIMIT 100
+        `, [id]);
+
+        res.json(result.rows);
+    } catch (err) {
+        console.error('Get History Error:', err);
+        res.status(500).json({ error: 'Database error' });
     }
 };

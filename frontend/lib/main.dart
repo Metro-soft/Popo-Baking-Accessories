@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
 import 'modules/core/screens/login_screen.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'modules/core/screens/main_layout.dart';
 import 'modules/core/services/api_service.dart';
+
+// Brand Color
+const Color kPrimaryColor = Color(0xFFA01B2D); // Deep Red from Logo
 
 void main() {
   runApp(const PopoBakingApp());
@@ -35,8 +39,9 @@ class _PopoBakingAppState extends State<PopoBakingApp> {
       title: 'Popo Baking ERP',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
+        colorScheme: ColorScheme.fromSeed(seedColor: kPrimaryColor),
         useMaterial3: true,
+        textTheme: GoogleFonts.poppinsTextTheme(),
       ),
       home: _isLoading
           ? const Scaffold(body: Center(child: CircularProgressIndicator()))

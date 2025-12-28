@@ -18,7 +18,8 @@ class _StockAdjustmentScreenState extends State<StockAdjustmentScreen> {
   bool _isLoading = false;
 
   // Form Fields
-  double _quantityChange = 0;
+  double _quantity = 0;
+  String _action = 'Remove'; // Default to Remove (Loss/Damage is most common)
   String _reason = 'Damaged';
   final List<String> _reasons = [
     'Damaged',
@@ -58,13 +59,15 @@ class _StockAdjustmentScreenState extends State<StockAdjustmentScreen> {
     setState(() => _isLoading = true);
 
     try {
-      // Determine sign based on reason or manual input?
-      // Let's assume user enters positive for add, negative for remove?
-      // Or better: Use "Action" dropdown (Add/Remove)
+      // Calculate final change based on Action
+      double finalChange = _quantity;
+      if (_action == 'Remove') {
+        finalChange = -_quantity;
+      }
 
       await _apiService.adjustStock(
         _selectedProduct!.id ?? 0,
-        _quantityChange,
+        finalChange,
         _reason,
       );
 
@@ -75,7 +78,8 @@ class _StockAdjustmentScreenState extends State<StockAdjustmentScreen> {
         _formKey.currentState!.reset();
         setState(() {
           _selectedProduct = null;
-          _quantityChange = 0;
+          _quantity = 0;
+          _action = 'Remove'; // Reset to default
         });
       }
     } catch (e) {
@@ -117,7 +121,10 @@ class _StockAdjustmentScreenState extends State<StockAdjustmentScreen> {
                   border: OutlineInputBorder(),
                   prefixIcon: Icon(Icons.inventory_2),
                 ),
-                // value: _selectedProduct, // Deprecated, using FormField state
+                key: ValueKey(
+                  _selectedProduct,
+                ), // Use Key to force rebuild on reset
+                initialValue: _selectedProduct,
                 items: _products.map((p) {
                   return DropdownMenuItem(
                     value: p,
@@ -130,6 +137,21 @@ class _StockAdjustmentScreenState extends State<StockAdjustmentScreen> {
               ),
               const SizedBox(height: 24),
 
+              // Action Selector (Add/Remove)
+              DropdownButtonFormField<String>(
+                decoration: const InputDecoration(
+                  labelText: 'Action',
+                  border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.swap_vert),
+                ),
+                initialValue: _action,
+                items: ['Add', 'Remove']
+                    .map((a) => DropdownMenuItem(value: a, child: Text(a)))
+                    .toList(),
+                onChanged: (val) => setState(() => _action = val!),
+              ),
+              const SizedBox(height: 24),
+
               // Reason Selector
               DropdownButtonFormField<String>(
                 decoration: const InputDecoration(
@@ -137,7 +159,7 @@ class _StockAdjustmentScreenState extends State<StockAdjustmentScreen> {
                   border: OutlineInputBorder(),
                   prefixIcon: Icon(Icons.info_outline),
                 ),
-                initialValue: _reason, // Set initial value here
+                initialValue: _reason,
                 items: _reasons
                     .map((r) => DropdownMenuItem(value: r, child: Text(r)))
                     .toList(),
@@ -148,20 +170,19 @@ class _StockAdjustmentScreenState extends State<StockAdjustmentScreen> {
               // Quantity Input
               TextFormField(
                 decoration: const InputDecoration(
-                  labelText: 'Quantity Change (+/-)',
-                  helperText: 'Enter negative value to reduce stock (e.g. -5)',
+                  labelText: 'Quantity',
+                  helperText: 'Enter positive amount',
                   border: OutlineInputBorder(),
                   prefixIcon: Icon(Icons.numbers),
                 ),
-                keyboardType: const TextInputType.numberWithOptions(
-                  signed: true,
-                ),
+                keyboardType: const TextInputType.numberWithOptions(),
                 validator: (val) {
                   if (val == null || val.isEmpty) return 'Enter quantity';
-                  if (double.tryParse(val) == 0) return 'Cannot be zero';
+                  final v = double.tryParse(val);
+                  if (v == null || v <= 0) return 'Must be greater than zero';
                   return null;
                 },
-                onSaved: (val) => _quantityChange = double.parse(val!),
+                onSaved: (val) => _quantity = double.parse(val!),
               ),
               const SizedBox(height: 40),
 

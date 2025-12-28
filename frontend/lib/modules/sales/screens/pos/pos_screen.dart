@@ -85,24 +85,62 @@ class _POSScreenState extends State<POSScreen>
       return;
     }
 
-    // Retail/Print check if already in cart
     final index = _cart.indexWhere(
       (item) => item['product'].id == p.id && item['type'] == type,
     );
+
+    int currentQty = 0;
     if (index >= 0) {
-      setState(() {
-        _cart[index]['quantity'] += _isReturnMode ? -1 : 1;
-      });
-    } else {
-      setState(() {
+      currentQty = _cart[index]['quantity'];
+    }
+
+    // Determine new quantity
+    final change = _isReturnMode ? -1 : 1;
+    final newQty = currentQty + change;
+
+    // Wholesale Check
+    double unitPrice = p.baseSellingPrice;
+    bool appliedWholesale = false;
+
+    // Only apply wholesale for Retail items, not Returns (keep original logic simple for now)
+    // Actually, returns should refund at the price sold, but that's complex without history.
+    // For now, let's just apply wholesale rule dynamically to the current cart state.
+
+    // Check threshold (ABS to handle returns if we wanted, but usually wholesale is for sales)
+    if (p.wholesalePrice != null && p.minWholesaleQty > 0) {
+      if (newQty.abs() >= p.minWholesaleQty) {
+        unitPrice = p.wholesalePrice!;
+        appliedWholesale = true;
+      }
+    }
+
+    setState(() {
+      if (index >= 0) {
+        _cart[index]['quantity'] = newQty;
+        _cart[index]['unitPrice'] = unitPrice; // Dynamic Price Update!
+        if (newQty == 0) _cart.removeAt(index);
+      } else {
         _cart.add({
           'product': p,
-          'quantity': _isReturnMode ? -1 : 1,
+          'quantity': change,
           'type': type,
-          'unitPrice': p.baseSellingPrice,
+          'unitPrice': unitPrice,
           'deposit': 0.0,
         });
-      });
+      }
+    });
+
+    // Optional: Toast for Wholesale
+    if (appliedWholesale &&
+        !currentQty.abs().isNegative &&
+        newQty.abs() >= p.minWholesaleQty &&
+        currentQty.abs() < p.minWholesaleQty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Wholesale Price Triggered for ${p.name}!'),
+          duration: const Duration(seconds: 1),
+        ),
+      );
     }
   }
 

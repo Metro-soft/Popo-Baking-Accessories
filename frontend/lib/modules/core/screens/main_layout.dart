@@ -6,6 +6,7 @@ import '../../inventory/screens/product_list_screen.dart';
 import '../../inventory/screens/receive_stock_screen.dart';
 import '../../inventory/screens/stock_adjustment_screen.dart';
 import '../../inventory/screens/stock_transfer_screen.dart';
+import '../../inventory/screens/stock_take_screen.dart';
 // Sales
 import '../../sales/screens/pos/pos_screen.dart';
 import '../../sales/screens/sales/invoice_list_screen.dart';
@@ -14,13 +15,6 @@ import '../../sales/screens/logistics/dispatch_screen.dart';
 import '../../finance/screens/cash_management_screen.dart';
 
 import '../../analytics/screens/dashboard/dashboard_screen.dart';
-// I only moved admin/inventory, sales, finance.
-// I did NOT move dashboard or logistics/dispatch_screen explicitly.
-// Checking file listing in earlier step (946) doesn't show dashboard.
-// I need to check where Dashboard and Dispatch are. They were likely left behind in `lib/screens/`.
-// I should move them to `lib/modules/core/screens/` or `lib/modules/analytics` / `lib/modules/sales`.
-// Dashboard -> Analytics or Core? Core.
-// Dispatch -> Logistics module? Or Sales? User said Sales/Distribution.
 
 class MainLayout extends StatefulWidget {
   const MainLayout({super.key});
@@ -39,12 +33,13 @@ class _MainLayoutState extends State<MainLayout> {
     switch (_selectedKey) {
       case 'dashboard':
         return const DashboardScreen();
+      case 'items_dashboard': // Unified Catalog
+        return const ProductListScreen();
       case 'products':
         return const ProductListScreen();
       case 'partners':
         return const PlaceholderScreen(title: 'Partners');
 
-      // Sales
       // Sales
       case 'sales_invoices':
         return const SalesInvoicesScreen();
@@ -68,6 +63,8 @@ class _MainLayoutState extends State<MainLayout> {
         return const StockAdjustmentScreen();
       case 'stock_transfer':
         return const StockTransferScreen();
+      case 'stock_take': // New Stock Take Route
+        return const StockTakeScreen();
       case 'cash_management':
         return const CashManagementScreen();
 
@@ -106,6 +103,7 @@ class _MainLayoutState extends State<MainLayout> {
     return LayoutBuilder(
       builder: (context, constraints) {
         if (constraints.maxWidth > 900) {
+          // Desktop Layout
           return Scaffold(
             body: Row(
               children: [
@@ -117,20 +115,36 @@ class _MainLayoutState extends State<MainLayout> {
                     children: [
                       // Header
                       Container(
-                        height: 80,
-                        alignment: Alignment.center,
-                        color: Colors.deepPurple,
-                        child: const Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
+                        height: 100,
+                        alignment: Alignment.centerLeft,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 20,
+                          vertical: 16,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          border: Border(
+                            bottom: BorderSide(color: Colors.grey.shade200),
+                          ),
+                        ),
+                        child: Row(
                           children: [
-                            Icon(Icons.cake, color: Colors.white, size: 30),
-                            SizedBox(width: 10),
-                            Text(
-                              'Popo Baking',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 22,
-                                fontWeight: FontWeight.bold,
+                            Image.asset(
+                              'assets/images/logo.png',
+                              height: 60,
+                              width: 60,
+                              fit: BoxFit.contain,
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                'Popo Baking\nAccessories',
+                                style: const TextStyle(
+                                  color: Color(0xFFA01B2D),
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                  height: 1.1,
+                                ),
                               ),
                             ),
                           ],
@@ -147,11 +161,31 @@ class _MainLayoutState extends State<MainLayout> {
                               Icons.dashboard_outlined,
                               'dashboard',
                             ),
-                            _buildMenuItem(
-                              'Products',
+
+                            // INVENTORY (Stock Ops)
+                            _buildExpansionMenu(
+                              'Inventory',
                               Icons.inventory_2_outlined,
-                              'products',
+                              [
+                                _buildSubMenuItem(
+                                  'All Items',
+                                  'items_dashboard',
+                                ),
+                                _buildSubMenuItem(
+                                  'Stock Adjustment',
+                                  'stock_adjustment',
+                                ),
+                                _buildSubMenuItem(
+                                  'Stock Transfer',
+                                  'stock_transfer',
+                                ),
+                                _buildSubMenuItem(
+                                  'Stock Take (Audit)',
+                                  'stock_take',
+                                ),
+                              ],
                             ),
+
                             _buildMenuItem(
                               'Partners',
                               Icons.group_outlined,
@@ -185,20 +219,11 @@ class _MainLayoutState extends State<MainLayout> {
                                   'payments_out',
                                 ),
                                 _buildSubMenuItem(
-                                  'Purchase Orders',
+                                  'Purchase Orders (Receive)',
                                   'purchase_orders',
-                                ),
-                                _buildSubMenuItem(
-                                  'Stock Adjustment',
-                                  'stock_adjustment',
-                                ),
-                                _buildSubMenuItem(
-                                  'Stock Transfer',
-                                  'stock_transfer',
                                 ),
                               ],
                             ),
-
                             _buildMenuItem(
                               'Expenses',
                               Icons.receipt_long_outlined,
@@ -234,19 +259,18 @@ class _MainLayoutState extends State<MainLayout> {
                               'settings',
                             ),
                             _buildMenuItem(
-                              'Backups / Restore',
+                              'Backups',
                               Icons.backup_outlined,
                               'backups',
                             ),
                             _buildMenuItem(
                               'Utilities',
-                              Icons.build_outlined,
+                              Icons.build,
                               'utilities',
                             ),
-                            const Divider(),
                             _buildMenuItem(
-                              'My Online Store',
-                              Icons.storefront,
+                              'Online Store',
+                              Icons.shopping_bag_outlined,
                               'online_store',
                             ),
                           ],
@@ -278,20 +302,19 @@ class _MainLayoutState extends State<MainLayout> {
           return Scaffold(
             appBar: AppBar(
               title: const Text('Popo Baking ERP'),
-              backgroundColor: Colors.deepPurple,
+              backgroundColor: const Color(0xFFA01B2D),
               foregroundColor: Colors.white,
             ),
             drawer: Drawer(
               child: Column(
                 children: [
-                  const UserAccountsDrawerHeader(
-                    accountName: Text('Admin'),
-                    accountEmail: Text('v1.0.0'),
-                    decoration: BoxDecoration(color: Colors.deepPurple),
-                    currentAccountPicture: Icon(
-                      Icons.cake,
-                      size: 50,
-                      color: Colors.white,
+                  UserAccountsDrawerHeader(
+                    accountName: const Text('Admin'),
+                    accountEmail: const Text('v1.0.0'),
+                    decoration: const BoxDecoration(color: Color(0xFFA01B2D)),
+                    currentAccountPicture: const CircleAvatar(
+                      backgroundColor: Colors.white,
+                      child: Icon(Icons.cake, color: Color(0xFFA01B2D)),
                     ),
                   ),
                   Expanded(
@@ -303,12 +326,35 @@ class _MainLayoutState extends State<MainLayout> {
                           'dashboard',
                           isMobile: true,
                         ),
-                        _buildMenuItem(
-                          'Products',
+
+                        // INVENTORY (Mobile)
+                        _buildExpansionMenu(
+                          'Inventory',
                           Icons.inventory_2_outlined,
-                          'products',
-                          isMobile: true,
+                          [
+                            _buildSubMenuItem(
+                              'All Items',
+                              'items_dashboard',
+                              isMobile: true,
+                            ),
+                            _buildSubMenuItem(
+                              'Stock Adjustment',
+                              'stock_adjustment',
+                              isMobile: true,
+                            ),
+                            _buildSubMenuItem(
+                              'Stock Transfer',
+                              'stock_transfer',
+                              isMobile: true,
+                            ),
+                            _buildSubMenuItem(
+                              'Stock Take (Audit)',
+                              'stock_take',
+                              isMobile: true,
+                            ),
+                          ],
                         ),
+
                         _buildMenuItem(
                           'Partners',
                           Icons.group_outlined,
@@ -359,7 +405,7 @@ class _MainLayoutState extends State<MainLayout> {
                               isMobile: true,
                             ),
                             _buildSubMenuItem(
-                              'Purchase Orders',
+                              'Purchase Orders (Receive)',
                               'purchase_orders',
                               isMobile: true,
                             ),
@@ -418,12 +464,12 @@ class _MainLayoutState extends State<MainLayout> {
     return ListTile(
       leading: Icon(
         icon,
-        color: isSelected ? Colors.deepPurple : Colors.grey[600],
+        color: isSelected ? const Color(0xFFA01B2D) : Colors.grey[600],
       ),
       title: Text(
         title,
         style: TextStyle(
-          color: isSelected ? Colors.deepPurple : Colors.black87,
+          color: isSelected ? const Color(0xFFA01B2D) : Colors.black87,
           fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
         ),
       ),
@@ -447,7 +493,7 @@ class _MainLayoutState extends State<MainLayout> {
       title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
       childrenPadding: const EdgeInsets.only(left: 20),
       collapsedIconColor: Colors.grey,
-      iconColor: Colors.deepPurple,
+      iconColor: const Color(0xFFA01B2D),
       children: children,
     );
   }
@@ -459,7 +505,7 @@ class _MainLayoutState extends State<MainLayout> {
         title,
         style: TextStyle(
           fontSize: 14,
-          color: isSelected ? Colors.deepPurple : Colors.black87,
+          color: isSelected ? const Color(0xFFA01B2D) : Colors.black87,
           fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
         ),
       ),
@@ -470,7 +516,7 @@ class _MainLayoutState extends State<MainLayout> {
         if (isMobile) Navigator.pop(context);
       },
       trailing: isSelected
-          ? const Icon(Icons.arrow_right, color: Colors.deepPurple, size: 16)
+          ? const Icon(Icons.arrow_right, color: Color(0xFFA01B2D), size: 16)
           : null,
     );
   }

@@ -54,17 +54,43 @@ class ApiService {
     return headers;
   }
 
+  void _handleError(
+    http.Response response, {
+    String defaultMessage = 'Request failed',
+  }) {
+    if (response.statusCode >= 400) {
+      String message = '$defaultMessage (Status: ${response.statusCode})';
+      try {
+        final body = jsonDecode(response.body);
+        if (body is Map && body.containsKey('error')) {
+          message = body['error'];
+        } else {
+          message = '$message: ${response.body}';
+        }
+      } catch (_) {
+        message = '$message: ${response.body}';
+      }
+      throw Exception(message);
+    }
+  }
+
   Future<List<Product>> getProducts() async {
     final response = await http.get(
       Uri.parse('$baseUrl/products'),
       headers: _headers,
     );
-    if (response.statusCode == 200) {
-      List<dynamic> body = jsonDecode(response.body);
-      return body.map((dynamic item) => Product.fromJson(item)).toList();
-    } else {
-      throw Exception('Failed to load products');
-    }
+    _handleError(response, defaultMessage: 'Failed to load products');
+    List<dynamic> body = jsonDecode(response.body);
+    return body.map((dynamic item) => Product.fromJson(item)).toList();
+  }
+
+  Future<Product> getProductById(int id) async {
+    final response = await http.get(
+      Uri.parse('$baseUrl/products/$id'),
+      headers: _headers,
+    );
+    _handleError(response, defaultMessage: 'Failed to load product');
+    return Product.fromJson(jsonDecode(response.body));
   }
 
   Future<Product> createProduct(Product product) async {
@@ -79,6 +105,23 @@ class ApiService {
     } else {
       throw Exception('Failed to create product: ${response.body}');
     }
+  }
+
+  Future<Product?> findProductByName(String name) async {
+    final response = await http.get(
+      Uri.parse(
+        '$baseUrl/products/check-name?name=${Uri.encodeComponent(name)}',
+      ),
+      headers: _headers,
+    );
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      if (data['found'] == true) {
+        return Product.fromJson(data['product']);
+      }
+    }
+    return null;
   }
 
   // Supplier & PO Methods (Keeping existing functionality)
@@ -380,5 +423,86 @@ class ApiService {
     } else {
       throw Exception('Failed to load transaction details');
     }
+  }
+
+  Future<List<String>> uploadImages(List<String> filePaths) async {
+    if (filePaths.isEmpty) return [];
+
+    var request = http.MultipartRequest('POST', Uri.parse('$baseUrl/upload'));
+    request.headers.addAll(_headers);
+
+    for (var path in filePaths) {
+      request.files.add(await http.MultipartFile.fromPath('images', path));
+    }
+
+    final streamedResponse = await request.send();
+    final response = await http.Response.fromStream(streamedResponse);
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      return List<String>.from(data['images']);
+    } else {
+      throw Exception('Image upload failed: ${response.body}');
+    }
+  }
+
+  Future<List<String>> getCategories() async {
+    final response = await http.get(
+      Uri.parse('$baseUrl/categories'),
+      headers: _headers,
+    );
+    if (response.statusCode == 200) {
+      List<dynamic> data = jsonDecode(response.body);
+      // Assuming returns [{id: 1, name: 'Flour'}, ...]. We just need names for now as product stores string.
+      // Or if it returns ['Flour', 'Sugar'], handle that.
+      // Safest is to handle List<dynamic> and extract 'name' if object, or toString if primitive.
+      return data.map((item) {
+        if (item is Map) return item['name'].toString();
+        return item.toString();
+      }).toList();
+    } else {
+      throw Exception('Failed to load categories');
+    }
+  }
+
+  Future<void> createCategory(String name) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/categories'),
+      headers: _headers,
+      body: jsonEncode({'name': name}),
+    );
+    if (response.statusCode != 201) {
+      throw Exception('Failed to create category');
+    }
+  }
+
+  Future<void> updateProduct(Product product) async {
+    final response = await http.put(
+      Uri.parse('$baseUrl/products/${product.id}'),
+      headers: _headers,
+      body: jsonEncode(product.toJson()),
+    );
+    if (response.statusCode != 200) {
+      throw Exception('Failed to update product: ${response.body}');
+    }
+  }
+
+  Future<void> deleteProduct(int id) async {
+    final response = await http.delete(
+      Uri.parse('$baseUrl/products/$id'),
+      headers: _headers,
+    );
+    if (response.statusCode != 200) {
+      throw Exception('Failed to delete product: ${response.body}');
+    }
+  }
+
+  Future<List<dynamic>> getStockHistory(int productId) async {
+    final response = await http.get(
+      Uri.parse('$baseUrl/products/$productId/history'),
+      headers: _headers,
+    );
+    _handleError(response, defaultMessage: 'Failed to load history');
+    return jsonDecode(response.body);
   }
 }

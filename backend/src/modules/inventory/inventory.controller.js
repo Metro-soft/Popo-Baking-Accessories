@@ -99,6 +99,13 @@ exports.receiveStock = async (req, res) => {
                 ]
             );
             processedBatches.push(batchResult.rows[0]);
+
+            // [NEW] Audit Log: Restock
+            await client.query(
+                `INSERT INTO stock_movements (product_id, type, quantity, reason, reference_id)
+                 VALUES ($1, 'restock', $2, 'Purchase Order', $3)`,
+                [productId, quantity, poId] // positive quantity
+            );
         }
 
         // 5. Commit
@@ -171,40 +178,54 @@ exports.adjustStock = async (req, res) => {
                 qtyToDeduct -= deduct;
             }
 
-            if (qtyToDeduct > 0) {
-                // Force negative on the last batch or create a dummy negative batch?
-                // For now, let's just warn but allow strict accounting if we wanted.
-                // We will update the last batch to negative if needed to keep totals correct?
-                // Or better yet, we just log the discrepancy.
-                // Ideally systems block this, but for "Adjustment" we might need to force it.
-                // Let's stop at 0 for batches but log the total.
-            }
-
+            // [NEW] Audit Log: Adjustment Only logged if actually processed?
+            // Yes, we log the requested change (or actual?). Requested is fine.
         } else {
             // INCREASE STOCK (Create a new "Adjustment" batch)
             await client.query(
                 `INSERT INTO inventory_batches (
-                    product_id, batch_number, location, 
+                    product_id, batch_number, branch_id, 
                     quantity_initial, quantity_remaining, 
                     buying_price_unit, expiry_date
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
                 [
                     productId,
                     `ADJ-${Date.now()}`,
-                    'thika_store',
+                    1, // Default Branch 1 for adjustments if not specified? Schema says branch_id needed.
+                    // Previous code used 'thika_store' string for location?? 
+                    // Wait, original code: values had 'thika_store'. But schema says branch_id.
+                    // Let's assume branch_id 1.
+                    // Oh, I see original code had 'thika_store' (line 194).
+                    // If schema expects INT, that would fail.
+                    // I will fix it to 1.
                     quantityChange,
                     quantityChange,
-                    0.00, // Zero cost for found items? Or weighted avg? 0 for now.
+                    0.00,
                     null
                 ]
             );
         }
 
-        // Log the Transaction
-        // Assuming we might have a stock_transactions table later, for now just console log.
-        // Or if we want to be fancy, insert into a simple log table if exists.
+        // [NEW] Audit Log: Adjustment
+        await client.query(
+            `INSERT INTO stock_movements (product_id, type, quantity, reason)
+             VALUES ($1, 'adjustment', $2, $3)`,
+            [productId, quantityChange, reason]
+        );
+
+        // Log the Transaction (Legacy / Auth Log)
+        const { createAuditLog } = require('../core/security.controller');
 
         await client.query('COMMIT');
+
+        // Audit Log
+        const logDetail = quantityChange > 0
+            ? `Increased stock of Product ${productId} by ${quantityChange}. Reason: ${reason}`
+            : `Reduced stock of Product ${productId} by ${Math.abs(quantityChange)}. Reason: ${reason}`;
+
+        const userId = req.user ? req.user.userId : 1;
+        await createAuditLog(userId, 'STOCK_ADJUSTMENT', logDetail);
+
         res.json({ message: 'Stock adjusted successfully' });
 
     } catch (err) {
