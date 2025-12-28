@@ -109,42 +109,127 @@ class _ProductDetailsDashboardState extends State<ProductDetailsDashboard> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(_currentProduct.name),
+        toolbarHeight: 90,
+        backgroundColor: Colors.white,
+        elevation: 1,
+        titleSpacing: 24,
+        iconTheme: const IconThemeData(color: Colors.black87),
+        title: Row(
+          children: [
+            CircleAvatar(
+              radius: 24,
+              backgroundColor: const Color(0xFFA01B2D).withOpacity(0.1),
+              child: Text(
+                _currentProduct.name.isNotEmpty ? _currentProduct.name[0] : '?',
+                style: const TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFFA01B2D),
+                ),
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    _currentProduct.name,
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.black87,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      Text(
+                        'SKU: ${_currentProduct.sku}',
+                        style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                      ),
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.grey[100],
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(color: Colors.grey[300]!),
+                        ),
+                        child: Text(
+                          _currentProduct.category,
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: Colors.grey[700],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.edit, color: Colors.white),
+            icon: const Icon(Icons.edit_outlined),
             tooltip: 'Edit Product',
             onPressed: _editProduct,
           ),
           IconButton(
-            icon: const Icon(Icons.delete, color: Colors.white70),
-            tooltip: 'Delete Product',
-            onPressed: _deleteProduct,
-          ),
-          TextButton.icon(
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) =>
-                      BulkVariantScreen(templateProduct: _currentProduct),
-                ),
-              );
-            },
-            icon: const Icon(Icons.copy, color: Colors.white),
-            label: const Text(
-              'Variants',
-              style: TextStyle(color: Colors.white),
-            ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.print, color: Colors.white),
+            icon: const Icon(Icons.print_outlined),
             tooltip: 'Print Label',
             onPressed: () {
               final printer = PrintingService();
               printer.printProductLabel(_currentProduct);
             },
           ),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert),
+            onSelected: (value) async {
+              if (value == 'delete') {
+                _deleteProduct();
+              } else if (value == 'variants') {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        BulkVariantScreen(templateProduct: _currentProduct),
+                  ),
+                );
+              }
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'variants',
+                child: Row(
+                  children: [
+                    Icon(Icons.copy, size: 20),
+                    SizedBox(width: 8),
+                    Text('Manage Variants'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'delete',
+                child: Row(
+                  children: [
+                    Icon(Icons.delete, color: Colors.red, size: 20),
+                    SizedBox(width: 8),
+                    Text('Delete Product', style: TextStyle(color: Colors.red)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(width: 16),
         ],
       ),
       body: ProductDetailsContent(product: _currentProduct),
@@ -180,16 +265,15 @@ class _ProductDetailsContentState extends State<ProductDetailsContent> {
   @override
   Widget build(BuildContext context) {
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _buildHeaderSection(),
-          const SizedBox(height: 24),
+          // Header section moved to AppBar
           LayoutBuilder(
             builder: (context, constraints) {
               // Threshold for side-by-side layout (e.g., tablet landscape/desktop)
-              if (constraints.maxWidth > 800) {
+              if (constraints.maxWidth > 900) {
                 return Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -197,9 +281,9 @@ class _ProductDetailsContentState extends State<ProductDetailsContent> {
                       flex: 4,
                       child: Column(
                         children: [
+                          _buildFinancialsSection(), // Moved Financials up since header is gone
+                          const SizedBox(height: 24),
                           _buildDetailsSection(),
-                          const SizedBox(height: 32),
-                          _buildFinancialsSection(),
                         ],
                       ),
                     ),
@@ -210,9 +294,9 @@ class _ProductDetailsContentState extends State<ProductDetailsContent> {
               } else {
                 return Column(
                   children: [
-                    _buildDetailsSection(),
-                    const SizedBox(height: 24),
                     _buildFinancialsSection(),
+                    const SizedBox(height: 24),
+                    _buildDetailsSection(),
                     const SizedBox(height: 24),
                     _buildStockHistorySection(),
                   ],
@@ -225,47 +309,21 @@ class _ProductDetailsContentState extends State<ProductDetailsContent> {
     );
   }
 
-  Widget _buildHeaderSection() {
-    return Card(
-      elevation: 2,
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Row(
-          children: [
-            CircleAvatar(
-              radius: 30,
-              backgroundColor: const Color(0xFFA01B2D).withValues(alpha: 0.2),
-              child: Text(
-                widget.product.name.isNotEmpty ? widget.product.name[0] : '?',
-                style: const TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFFA01B2D),
-                ),
-              ),
+  Widget _buildDetailRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8.0),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 120,
+            child: Text(
+              label,
+              style: const TextStyle(fontWeight: FontWeight.bold),
             ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Name removed
-                  Text(
-                    'SKU: ${widget.product.sku}',
-                    style: const TextStyle(color: Colors.grey),
-                  ),
-                  const SizedBox(height: 4),
-                  Chip(
-                    label: Text(widget.product.category),
-                    padding: EdgeInsets.zero,
-                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    backgroundColor: Colors.grey[100],
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
+          ),
+          Expanded(child: Text(value)),
+        ],
       ),
     );
   }
