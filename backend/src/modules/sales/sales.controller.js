@@ -4,11 +4,11 @@ exports.processTransaction = async (req, res) => {
     const { customerId, items, payments, discountAmount, discountReason, isHold } = req.body; // Added new fields
 
     // 1. Validation
-    if (!items || items.length === 0) {
+    if (!items || !Array.isArray(items) || items.length === 0) {
         return res.status(400).json({ error: 'No items in cart' });
     }
-    if (!payments || payments.length === 0) {
-        return res.status(400).json({ error: 'No payments provided' });
+    if (!isHold && (!payments || !Array.isArray(payments) || payments.length === 0)) {
+        return res.status(400).json({ error: 'No payments provided for completed order' });
     }
 
     const client = await db.pool.connect();
@@ -21,8 +21,10 @@ exports.processTransaction = async (req, res) => {
         let depositTotal = 0;
         // Discount logic
         const discount = parseFloat(discountAmount) || 0;
+        if (discount < 0) throw new Error('Discount cannot be negative');
 
         for (const item of items) {
+            if (item.quantity === 0) throw new Error(`Invalid Quantity for Product ${item.productId}`);
             orderTotal += (item.quantity * item.unitPrice); // Quantity can be negative for returns
             if (item.type === 'asset_rental') {
                 depositTotal += (item.depositAmount || 0);

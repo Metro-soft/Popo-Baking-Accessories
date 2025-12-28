@@ -7,8 +7,8 @@ exports.receiveStock = async (req, res) => {
     if (!items || !Array.isArray(items) || items.length === 0) {
         return res.status(400).json({ error: 'No items provided' });
     }
-    if (!supplierId) {
-        return res.status(400).json({ error: 'Supplier is required' });
+    if (!supplierId || isNaN(supplierId)) {
+        return res.status(400).json({ error: 'Valid Supplier ID is required' });
     }
 
     // Default to Branch 1 (Head Office) if not specified
@@ -16,6 +16,10 @@ exports.receiveStock = async (req, res) => {
 
     const tCost = parseFloat(transportCost) || 0;
     const pCost = parseFloat(packagingCost) || 0;
+    if (tCost < 0 || pCost < 0) {
+        return res.status(400).json({ error: 'Costs cannot be negative' });
+    }
+
     const totalExtraCost = tCost + pCost;
 
     const client = await db.pool.connect();
@@ -26,6 +30,8 @@ exports.receiveStock = async (req, res) => {
         // 2. Step A: Calculate Total Product Value (Invoice Subtotal)
         let totalProductValue = 0;
         for (const item of items) {
+            if (item.quantity <= 0) throw new Error(`Invalid Item Quantity: ${item.quantity}`);
+            if (item.unitPrice < 0) throw new Error(`Invalid Item Price: ${item.unitPrice}`);
             totalProductValue += (item.quantity * item.unitPrice);
         }
 

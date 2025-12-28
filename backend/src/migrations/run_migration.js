@@ -3,10 +3,10 @@ const path = require('path');
 const db = require('../config/db');
 
 const runMigration = async () => {
-    const sqlPath = path.join(__dirname, '006_add_inventory_transfers.sql');
+    const sqlPath = path.join(__dirname, '007_setup_auth.sql');
     const sql = fs.readFileSync(sqlPath, 'utf8');
 
-    console.log('Running Migration: 006_add_inventory_transfers.sql ...');
+    console.log('Running Migration: 007_setup_auth.sql ...');
 
     try {
         await db.query(sql);
