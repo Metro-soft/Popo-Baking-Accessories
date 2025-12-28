@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import '../../core/services/api_service.dart';
-import '../../inventory/models/product_model.dart';
+import '../../../core/services/api_service.dart';
+import '../../../inventory/models/product_model.dart';
 import 'widgets/customer_selector.dart';
 import 'widgets/payment_modal.dart';
 

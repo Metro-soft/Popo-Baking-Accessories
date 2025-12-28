@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import '../../core/services/api_service.dart';
+import '../../../core/services/api_service.dart';
 
 class SalesInvoicesScreen extends StatefulWidget {
   const SalesInvoicesScreen({super.key});
@@ -33,10 +33,11 @@ class _SalesInvoicesScreenState extends State<SalesInvoicesScreen> {
       final data = await _apiService.getSalesHistory();
       setState(() => _invoices = data);
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      }
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -132,7 +133,7 @@ class _SalesInvoicesScreenState extends State<SalesInvoicesScreen> {
                           ],
                         ),
                         onTap: () {
-                          // TODO: Show Invoice Detail / Print View
+                          // Show Invoice Detail
                           _showInvoiceDetail(invoice);
                         },
                       );
@@ -204,10 +205,12 @@ class _SalesInvoicesScreenState extends State<SalesInvoicesScreen> {
               FutureBuilder(
                 future: _apiService.getTransactionDetails(invoice['id']),
                 builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting)
+                  if (snapshot.connectionState == ConnectionState.waiting) {
                     return const LinearProgressIndicator();
-                  if (snapshot.hasError)
+                  }
+                  if (snapshot.hasError) {
                     return Text('Error loading items: ${snapshot.error}');
+                  }
 
                   final details = snapshot.data as Map<String, dynamic>;
                   final items = details['items'] as List<dynamic>;

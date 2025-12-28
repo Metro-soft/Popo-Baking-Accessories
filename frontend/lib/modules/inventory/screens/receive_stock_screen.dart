@@ -68,10 +68,11 @@ class _ReceiveStockScreenState extends State<ReceiveStockScreen> {
         }
       });
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      }
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -80,8 +81,9 @@ class _ReceiveStockScreenState extends State<ReceiveStockScreen> {
   void _addItem() {
     if (_currentItem == null ||
         _qtyCtrl.text.isEmpty ||
-        _priceCtrl.text.isEmpty)
+        _priceCtrl.text.isEmpty) {
       return;
+    }
     final qty = int.tryParse(_qtyCtrl.text);
     final price = double.tryParse(_priceCtrl.text);
 
@@ -137,10 +139,11 @@ class _ReceiveStockScreenState extends State<ReceiveStockScreen> {
         Navigator.pop(context); // Go back or clear form
       }
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text('Failed: $e')));
+      }
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -165,7 +168,8 @@ class _ReceiveStockScreenState extends State<ReceiveStockScreen> {
                           children: [
                             Expanded(
                               child: DropdownButtonFormField<int>(
-                                value: _selectedSupplierId,
+                                key: ValueKey(_selectedSupplierId),
+                                initialValue: _selectedSupplierId,
                                 decoration: const InputDecoration(
                                   labelText: 'Supplier',
                                   border: OutlineInputBorder(),
@@ -185,7 +189,8 @@ class _ReceiveStockScreenState extends State<ReceiveStockScreen> {
                             const SizedBox(width: 16),
                             Expanded(
                               child: DropdownButtonFormField<int>(
-                                value: _selectedBranchId,
+                                key: ValueKey(_selectedBranchId),
+                                initialValue: _selectedBranchId,
                                 decoration: const InputDecoration(
                                   labelText: 'Receive To Branch',
                                   border: OutlineInputBorder(),
@@ -246,7 +251,8 @@ class _ReceiveStockScreenState extends State<ReceiveStockScreen> {
                             Expanded(
                               flex: 3,
                               child: DropdownButtonFormField<Product>(
-                                value: _currentItem,
+                                key: ValueKey(_currentItem),
+                                initialValue: _currentItem,
                                 decoration: const InputDecoration(
                                   labelText: 'Product',
                                 ),
@@ -306,7 +312,7 @@ class _ReceiveStockScreenState extends State<ReceiveStockScreen> {
                             height: 200,
                             child: ListView.separated(
                               itemCount: _cart.length,
-                              separatorBuilder: (_, __) =>
+                              separatorBuilder: (context, index) =>
                                   const Divider(height: 1),
                               itemBuilder: (ctx, i) {
                                 final item = _cart[i];

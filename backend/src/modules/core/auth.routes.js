@@ -1,10 +1,13 @@
 const express = require('express');
 const router = express.Router();
-const securityController = require('./security.controller');
+const AuthController = require('./auth.controller');
+const { authenticateToken } = require('../../middleware/auth.middleware');
 
-router.post('/shift/open', securityController.openShift);
-router.post('/shift/close', securityController.closeShift);
-router.get('/history', securityController.getShiftHistory);
-router.get('/audit', securityController.getAuditLogs);
+// Public Routes
+router.post('/register', AuthController.register); // Ideally protect this for Admin only later
+router.post('/login', AuthController.login);
+
+// Protected Routes
+router.get('/profile', authenticateToken, AuthController.getProfile);
 
 module.exports = router;

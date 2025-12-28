@@ -184,8 +184,6 @@ class ApiService {
       }),
     );
     if (response.statusCode != 200) {
-    );
-    if (response.statusCode != 200) {
       throw Exception('Failed to adjust stock: ${response.body}');
     }
   }

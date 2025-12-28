@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../../../services/api_service.dart';
+import '../../../../core/services/api_service.dart';
 
 class CustomerSelector extends StatefulWidget {
   final Function(Map<String, dynamic>?) onCustomerSelected;

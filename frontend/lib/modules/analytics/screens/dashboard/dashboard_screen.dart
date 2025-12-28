@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../../services/api_service.dart';
+import '../../../../modules/core/services/api_service.dart'; // Correct path from analytics/screens/dashboard/ -> core/services/
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});

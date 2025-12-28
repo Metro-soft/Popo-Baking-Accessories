@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import '../../services/api_service.dart';
-import '../../models/product_model.dart'; // Assuming this exists
+import '../../core/services/api_service.dart';
+import '../models/product_model.dart'; // Assuming this exists
 
 class StockTransferScreen extends StatefulWidget {
   const StockTransferScreen({super.key});
@@ -42,10 +42,11 @@ class _StockTransferScreenState extends State<StockTransferScreen> {
         _products = products;
       });
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      }
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -112,10 +113,11 @@ class _StockTransferScreenState extends State<StockTransferScreen> {
         });
       }
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text('Transfer Failed: $e')));
+      }
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -137,7 +139,8 @@ class _StockTransferScreenState extends State<StockTransferScreen> {
                     children: [
                       Expanded(
                         child: DropdownButtonFormField<int>(
-                          value: _selectedFromBranch,
+                          key: ValueKey(_selectedFromBranch),
+                          initialValue: _selectedFromBranch,
                           decoration: const InputDecoration(
                             labelText: 'From Branch',
                             border: OutlineInputBorder(),
@@ -159,7 +162,8 @@ class _StockTransferScreenState extends State<StockTransferScreen> {
                       const SizedBox(width: 16),
                       Expanded(
                         child: DropdownButtonFormField<int>(
-                          value: _selectedToBranch,
+                          key: ValueKey(_selectedToBranch),
+                          initialValue: _selectedToBranch,
                           decoration: const InputDecoration(
                             labelText: 'To Branch',
                             border: OutlineInputBorder(),
@@ -189,7 +193,8 @@ class _StockTransferScreenState extends State<StockTransferScreen> {
                       Expanded(
                         flex: 3,
                         child: DropdownButtonFormField<Product>(
-                          value: _selectedProduct,
+                          key: ValueKey(_selectedProduct),
+                          initialValue: _selectedProduct,
                           decoration: const InputDecoration(
                             labelText: 'Select Product',
                             border: OutlineInputBorder(),
@@ -234,7 +239,7 @@ class _StockTransferScreenState extends State<StockTransferScreen> {
                   Expanded(
                     child: ListView.separated(
                       itemCount: _transferItems.length,
-                      separatorBuilder: (_, __) => const Divider(),
+                      separatorBuilder: (context, index) => const Divider(),
                       itemBuilder: (ctx, i) {
                         final item = _transferItems[i];
                         return ListTile(
