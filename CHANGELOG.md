@@ -7,6 +7,7 @@ All notable changes to this project will be documented in this file.
 ### Added
 
 - **Frontend Modular Architecture**: Refactored the entire frontend codebase to use a feature-based module structure (Inventory, Sales, Finance, Core).
+- **User Login & Authentication**: Implemented full login flow with secure authentication using `auth.middleware.js` and `LoginScreen`.
 - **Finance Backend**: Rebuilt finance backend with clean modular system for C2B (Collections) and B2C (Disbursements).
 - **Middleware**: Added `auth.middleware.js` for centralized authentication handling.
 - **Controllers**: Added `auth.controller.js` and updated `branch.controller.js`, `inventory.controller.js`.
