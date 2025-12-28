@@ -118,7 +118,7 @@ class _ProductDetailsDashboardState extends State<ProductDetailsDashboard> {
           children: [
             CircleAvatar(
               radius: 24,
-              backgroundColor: const Color(0xFFA01B2D).withOpacity(0.1),
+              backgroundColor: const Color(0xFFA01B2D).withValues(alpha: 0.1),
               child: Text(
                 _currentProduct.name.isNotEmpty ? _currentProduct.name[0] : '?',
                 style: const TextStyle(
@@ -531,48 +531,4 @@ class _ProductDetailsContentState extends State<ProductDetailsContent> {
     );
   }
 
-  Widget _buildDetailRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8.0),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 120,
-            child: Text(
-              label,
-              style: const TextStyle(
-                color: Colors.grey,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-          Expanded(child: Text(value)),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStatCard(String title, String value, Color color) {
-    return Card(
-      elevation: 2,
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          children: [
-            Text(title, style: const TextStyle(color: Colors.grey)),
-            const SizedBox(height: 8),
-            Text(
-              value,
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: color,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
+  // Removed duplicate _buildDetailRow and unused _buildStatCard
