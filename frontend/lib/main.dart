@@ -20,17 +20,12 @@ class PopoBakingApp extends StatefulWidget {
 
 class _PopoBakingAppState extends State<PopoBakingApp> {
   final ApiService _apiService = ApiService();
-  bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
-    _checkAuth();
-  }
-
-  Future<void> _checkAuth() async {
-    await _apiService.loadToken();
-    setState(() => _isLoading = false);
+    // User requested to force login on every launch.
+    // We do NOT check for existing token here.
   }
 
   @override
@@ -43,11 +38,12 @@ class _PopoBakingAppState extends State<PopoBakingApp> {
         useMaterial3: true,
         textTheme: GoogleFonts.poppinsTextTheme(),
       ),
-      home: _isLoading
-          ? const Scaffold(body: Center(child: CircularProgressIndicator()))
-          : _apiService.isAuthenticated
-          ? const MainLayout()
-          : const LoginScreen(),
+      home: ValueListenableBuilder<bool>(
+        valueListenable: _apiService.authState,
+        builder: (context, isAuthenticated, _) {
+          return isAuthenticated ? const MainLayout() : const LoginScreen();
+        },
+      ),
     );
   }
 }

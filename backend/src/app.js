@@ -33,6 +33,9 @@ const analyticsRoutes = require('./modules/analytics/analytics.routes');
 const branchRoutes = require('./modules/core/branch.routes');
 const cashRoutes = require('./modules/finance/cash.routes');
 const categoryRoutes = require('./modules/inventory/category.routes');
+const locationsRoutes = require('./modules/locations/locations.routes');
+const reportsRoutes = require('./modules/reports/reports.routes');
+const partnerRoutes = require('./modules/partners/partners.routes');
 
 const { authenticateToken } = require('./middleware/auth.middleware');
 
@@ -55,7 +58,10 @@ app.use('/api/customers', authenticateToken, customerRoutes);
 app.use('/api/analytics', authenticateToken, analyticsRoutes);
 app.use('/api/branches', authenticateToken, branchRoutes);
 app.use('/api/cash', authenticateToken, cashRoutes);
-app.use('/api/categories', authenticateToken, categoryRoutes); // New Category Route
+app.use('/api/categories', authenticateToken, categoryRoutes);
+app.use('/api/locations', authenticateToken, locationsRoutes); // New Locations Route
+app.use('/api/reports', authenticateToken, reportsRoutes); // Analytics Reports
+app.use('/api/partners', authenticateToken, partnerRoutes); // Partners (Suppliers & Customers)
 
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);

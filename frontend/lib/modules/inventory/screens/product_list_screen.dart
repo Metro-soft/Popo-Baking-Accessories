@@ -193,6 +193,12 @@ class _ProductListScreenState extends State<ProductListScreen> {
                               _formProduct = p;
                             });
                           },
+                          onDelete: () {
+                            setState(() {
+                              _selectedProduct = null;
+                            });
+                            _loadProducts();
+                          },
                         )
                       : const Center(
                           child: Column(

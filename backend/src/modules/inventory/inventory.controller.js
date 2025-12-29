@@ -102,9 +102,9 @@ exports.receiveStock = async (req, res) => {
 
             // [NEW] Audit Log: Restock
             await client.query(
-                `INSERT INTO stock_movements (product_id, type, quantity, reason, reference_id)
-                 VALUES ($1, 'restock', $2, 'Purchase Order', $3)`,
-                [productId, quantity, poId] // positive quantity
+                `INSERT INTO stock_movements (product_id, type, quantity, reason, reference_id, branch_id)
+                 VALUES ($1, 'restock', $2, 'Purchase Order', $3, $4)`,
+                [productId, quantity, poId, targetBranchId]
             );
         }
 
@@ -129,15 +129,30 @@ exports.receiveStock = async (req, res) => {
 
 exports.getLowStockItems = async (req, res) => {
     try {
-        const threshold = 10; // Default threshold, could be dynamic per product later
-        const result = await db.query(`
-            SELECT p.id, p.name, p.sku, COALESCE(SUM(ib.quantity_remaining), 0) as total_quantity
+        const { branchId } = req.query;
+
+        let query = `
+            SELECT 
+                p.id, p.name, p.sku, 
+                10 as reorder_level,
+                COALESCE(SUM(ib.quantity_remaining), 0) as total_quantity
             FROM products p
             LEFT JOIN inventory_batches ib ON p.id = ib.product_id
+        `;
+
+        const params = [];
+        if (branchId && branchId !== 'null') {
+            query += ` AND ib.branch_id = $1`;
+            params.push(branchId);
+        }
+
+        query += `
             GROUP BY p.id, p.name, p.sku
-            HAVING COALESCE(SUM(ib.quantity_remaining), 0) <= $1
+            HAVING COALESCE(SUM(ib.quantity_remaining), 0) <= 10
             ORDER BY total_quantity ASC
-        `, [threshold]);
+        `;
+
+        const result = await db.query(query, params);
         res.json(result.rows);
     } catch (err) {
         console.error('Low Stock Error:', err);
@@ -146,7 +161,7 @@ exports.getLowStockItems = async (req, res) => {
 };
 
 exports.adjustStock = async (req, res) => {
-    const { productId, quantityChange, reason } = req.body;
+    const { productId, quantityChange, reason, branchId } = req.body;
     // quantityChange: negative for shrinkage, positive for found stock
     if (!productId || !quantityChange || quantityChange === 0 || !reason) {
         return res.status(400).json({ error: 'Invalid adjustment data' });
@@ -162,9 +177,9 @@ exports.adjustStock = async (req, res) => {
 
             const batches = await client.query(
                 `SELECT id, quantity_remaining FROM inventory_batches 
-                 WHERE product_id = $1 AND quantity_remaining > 0 
+                 WHERE product_id = $1 AND branch_id = $2 AND quantity_remaining > 0 
                  ORDER BY received_at ASC`,
-                [productId]
+                [productId, branchId || 1]
             );
 
             for (const batch of batches.rows) {
@@ -191,13 +206,7 @@ exports.adjustStock = async (req, res) => {
                 [
                     productId,
                     `ADJ-${Date.now()}`,
-                    1, // Default Branch 1 for adjustments if not specified? Schema says branch_id needed.
-                    // Previous code used 'thika_store' string for location?? 
-                    // Wait, original code: values had 'thika_store'. But schema says branch_id.
-                    // Let's assume branch_id 1.
-                    // Oh, I see original code had 'thika_store' (line 194).
-                    // If schema expects INT, that would fail.
-                    // I will fix it to 1.
+                    branchId || 1, // Use provided branchId or default to 1
                     quantityChange,
                     quantityChange,
                     0.00,
@@ -208,9 +217,9 @@ exports.adjustStock = async (req, res) => {
 
         // [NEW] Audit Log: Adjustment
         await client.query(
-            `INSERT INTO stock_movements (product_id, type, quantity, reason)
-             VALUES ($1, 'adjustment', $2, $3)`,
-            [productId, quantityChange, reason]
+            `INSERT INTO stock_movements (product_id, type, quantity, reason, branch_id)
+             VALUES ($1, 'adjustment', $2, $3, $4)`,
+            [productId, quantityChange, reason, branchId || 1]
         );
 
         // Log the Transaction (Legacy / Auth Log)
@@ -323,6 +332,20 @@ exports.createTransfer = async (req, res) => {
 
                 qtyToDeduct -= deduct;
             }
+
+            // [NEW] Audit Log: Transfer Out (Source)
+            await client.query(
+                `INSERT INTO stock_movements (product_id, type, quantity, reason, reference_id, created_at, branch_id)
+                 VALUES ($1, 'transfer_out', $2, $3, $4, NOW(), $5)`,
+                [productId, -quantity, `Transfer to Branch ${toBranchId}`, transferId, fromBranchId]
+            );
+
+            // [NEW] Audit Log: Transfer In (Destination)
+            await client.query(
+                `INSERT INTO stock_movements (product_id, type, quantity, reason, reference_id, created_at, branch_id)
+                 VALUES ($1, 'transfer_in', $2, $3, $4, NOW(), $5)`,
+                [productId, quantity, `Transfer from Branch ${fromBranchId}`, transferId, toBranchId]
+            );
         }
 
         await client.query('COMMIT');
@@ -334,5 +357,26 @@ exports.createTransfer = async (req, res) => {
         res.status(500).json({ error: err.message });
     } finally {
         client.release();
+    }
+};
+
+exports.getStockByBranch = async (req, res) => {
+    const { productId } = req.params;
+    try {
+        const result = await db.query(`
+            SELECT 
+                b.id as branch_id, 
+                b.name as branch_name, 
+                COALESCE(SUM(ib.quantity_remaining), 0) as stock
+            FROM locations b
+            LEFT JOIN inventory_batches ib ON b.id = ib.branch_id AND ib.product_id = $1
+            GROUP BY b.id, b.name
+            ORDER BY b.id ASC
+        `, [productId]);
+
+        res.json(result.rows);
+    } catch (err) {
+        console.error('Stock By Branch Error:', err);
+        res.status(500).json({ error: 'Failed to fetch branch stock' });
     }
 };

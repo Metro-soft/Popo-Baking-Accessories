@@ -15,6 +15,10 @@ import '../../sales/screens/logistics/dispatch_screen.dart';
 import '../../finance/screens/cash_management_screen.dart';
 
 import '../../analytics/screens/dashboard/dashboard_screen.dart';
+import '../../admin/branch_management_screen.dart';
+import '../../reports/screens/reports_hub_screen.dart';
+import '../../admin/screens/user_activity_screen.dart';
+import '../../partners/screens/partners_screen.dart';
 
 class MainLayout extends StatefulWidget {
   const MainLayout({super.key});
@@ -33,12 +37,14 @@ class _MainLayoutState extends State<MainLayout> {
     switch (_selectedKey) {
       case 'dashboard':
         return const DashboardScreen();
+      case 'reports_hub':
+        return const ReportsHubScreen();
       case 'items_dashboard': // Unified Catalog
         return const ProductListScreen();
       case 'products':
         return const ProductListScreen();
       case 'partners':
-        return const PlaceholderScreen(title: 'Partners');
+        return const PartnersScreen();
 
       // Sales
       case 'sales_invoices':
@@ -65,6 +71,8 @@ class _MainLayoutState extends State<MainLayout> {
         return const StockTransferScreen();
       case 'stock_take': // New Stock Take Route
         return const StockTakeScreen();
+      case 'manage_branches':
+        return const BranchManagementScreen();
       case 'cash_management':
         return const CashManagementScreen();
 
@@ -82,7 +90,7 @@ class _MainLayoutState extends State<MainLayout> {
         return const PlaceholderScreen(title: 'Bills');
 
       case 'user_activity':
-        return const PlaceholderScreen(title: 'User Activity');
+        return const UserActivityScreen();
 
       case 'settings':
         return const PlaceholderScreen(title: 'Settings');
@@ -183,6 +191,10 @@ class _MainLayoutState extends State<MainLayout> {
                                   'Stock Take (Audit)',
                                   'stock_take',
                                 ),
+                                _buildSubMenuItem(
+                                  'Branch Management',
+                                  'manage_branches',
+                                ),
                               ],
                             ),
 
@@ -245,6 +257,11 @@ class _MainLayoutState extends State<MainLayout> {
                                 _buildSubMenuItem('Payroll', 'payroll'),
                                 _buildSubMenuItem('Bills', 'bills'),
                               ],
+                            ),
+                            _buildMenuItem(
+                              'Reports',
+                              Icons.analytics,
+                              'reports_hub',
                             ),
 
                             const Divider(),
@@ -352,6 +369,11 @@ class _MainLayoutState extends State<MainLayout> {
                               'stock_take',
                               isMobile: true,
                             ),
+                            _buildSubMenuItem(
+                              'Branch Management',
+                              'manage_branches',
+                              isMobile: true,
+                            ),
                           ],
                         ),
 
@@ -440,6 +462,12 @@ class _MainLayoutState extends State<MainLayout> {
                             ),
                             _buildSubMenuItem('Bills', 'bills', isMobile: true),
                           ],
+                        ),
+                        _buildMenuItem(
+                          'Reports',
+                          Icons.analytics,
+                          'reports_hub',
+                          isMobile: true,
                         ),
                       ],
                     ),

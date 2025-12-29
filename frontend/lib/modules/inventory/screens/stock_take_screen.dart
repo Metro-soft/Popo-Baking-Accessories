@@ -13,8 +13,16 @@ class StockTakeScreen extends StatefulWidget {
 class _StockTakeScreenState extends State<StockTakeScreen> {
   final ApiService _apiService = ApiService();
   List<Product> _products = [];
+  List<dynamic> _branches = [];
+  int? _selectedBranchId;
   // Map of productId -> Actual Count
   final Map<int, double> _counts = {};
+
+  // Advanced Audit State
+  final Map<int, int> _attempts = {}; // ProductId -> Attempt Count
+  final Map<int, bool> _locked = {}; // ProductId -> Is Locked?
+  final Map<int, bool> _verified = {}; // ProductId -> Is Verified?
+
   bool _isLoading = false;
 
   @override
@@ -26,7 +34,24 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
   Future<void> _loadProducts() async {
     setState(() => _isLoading = true);
     try {
-      final products = await _apiService.getProducts();
+      // 1. Load Branches if empty
+      if (_branches.isEmpty) {
+        final branches = await _apiService.getBranches();
+        if (mounted) {
+          setState(() {
+            _branches = branches;
+            if (_branches.isNotEmpty && _selectedBranchId == null) {
+              _selectedBranchId = _branches[0]['id'];
+            }
+          });
+        }
+      }
+
+      // 2. Load Products specific to the selected branch
+      final products = await _apiService.getProducts(
+        branchId: _selectedBranchId,
+      );
+
       // Optionally fetch Low Stock alerts to merge? No, plain product list is better.
       // We might need to fetch current stock levels specifically if Product model doesn't have it up to date?
       // Product model has 'stockLevel'.
@@ -50,6 +75,8 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
   }
 
   void _updateCount(int productId, String val) {
+    if (_locked[productId] == true) return; // Prevent editing if locked
+
     if (val.isEmpty) return;
     final d = double.tryParse(val);
     if (d != null) {
@@ -59,14 +86,82 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
     }
   }
 
-  Future<void> _submitStockTake() async {
+  // Phase 1: Verification Logic (The 3-Strike Rule)
+  void _verifyCounts() {
+    setState(() {
+      int mismatches = 0;
+
+      for (var p in _products) {
+        // Skip if already verified or locked
+        if (_verified[p.id] == true || _locked[p.id] == true) continue;
+
+        final actual = _counts[p.id] ?? 0;
+        final system = p.stockLevel;
+
+        if (actual == system) {
+          _verified[p.id!] = true;
+        } else {
+          // Mismatch Found
+          mismatches++;
+          int currentAttempts = _attempts[p.id!] ?? 0;
+          currentAttempts++;
+
+          if (currentAttempts >= 3) {
+            // STRIKE 3: Lock it
+            _locked[p.id!] = true;
+            _attempts[p.id!] = currentAttempts;
+          } else {
+            // Strike 1 or 2: Just increment
+            _attempts[p.id!] = currentAttempts;
+          }
+        }
+      }
+
+      if (mismatches > 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Mismatches found. Please recount yellow items.'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      } else {
+        // All clear!
+        _showFinalReport();
+      }
+    });
+  }
+
+  Future<void> _showFinalReport() async {
+    // Calculate final stats
+    int verifiedCount = _verified.values.where((v) => v).length;
+    int escalatedCount = _locked.values.where((v) => v).length;
+
     bool confirm =
         await showDialog(
           context: context,
           builder: (ctx) => AlertDialog(
-            title: const Text('Confirm Stock Take'),
-            content: const Text(
-              'This will adjust stock levels for ALL modified items. Changes cannot be undone lightly.',
+            title: const Text('Audit Report'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Verified Matches: $verifiedCount',
+                  style: const TextStyle(
+                    color: Colors.green,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                Text(
+                  'Escalated / Locked: $escalatedCount',
+                  style: const TextStyle(
+                    color: Colors.red,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Text('Submit these results to Head Office?'),
+              ],
             ),
             actions: [
               TextButton(
@@ -75,7 +170,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
               ),
               ElevatedButton(
                 onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('Confirm'),
+                child: const Text('Submit Report'),
               ),
             ],
           ),
@@ -86,28 +181,34 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
 
     setState(() => _isLoading = true);
 
-    // We need to iterate and find variances
-    // Variance = Actual - System
-    // If Variance != 0, call adjustStock
-
     int adjustmentsMade = 0;
     List<String> errors = [];
 
     try {
       for (var p in _products) {
         final actual = _counts[p.id!] ?? 0;
-        final system = p.stockLevel; // Assuming this is current
+        final system = p.stockLevel;
         final variance = actual - system;
 
-        if (variance != 0) {
-          // Send Adjustment
-          String reason = 'Stock Take / Audit';
-          try {
-            await _apiService.adjustStock(p.id!, variance, reason);
-            adjustmentsMade++;
-          } catch (e) {
-            errors.add('${p.name}: $e');
-          }
+        // If variance is 0, we still might want to log 'Verified' audit event,
+        // but adjustStock usually expects a change.
+        // For now, only send items with Variance != 0 (Escalated or Accepted).
+        if (variance == 0) continue;
+
+        String reason = _locked[p.id] == true
+            ? 'Audit: Escalated Discrepancy (Attempt 3 Failed)'
+            : 'Audit: Manual Adjustment';
+
+        try {
+          await _apiService.adjustStock(
+            p.id!,
+            variance,
+            reason,
+            branchId: _selectedBranchId,
+          );
+          adjustmentsMade++;
+        } catch (e) {
+          errors.add('${p.name}: $e');
         }
       }
 
@@ -115,7 +216,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
         showDialog(
           context: context,
           builder: (_) => AlertDialog(
-            title: const Text('Stock Take Completed'),
+            title: const Text('Audit Completed'),
             content: Text(
               'Processed $adjustmentsMade adjustments.\nErrors: ${errors.length}',
             ),
@@ -128,7 +229,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                     MaterialPageRoute(builder: (_) => const MainLayout()),
                   );
                 },
-                child: const Text('OK'),
+                child: const Text('Finish'),
               ),
             ],
           ),
@@ -138,7 +239,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('Critical Error: $e')));
+        ).showSnackBar(SnackBar(content: Text('Error: $e')));
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);
@@ -167,19 +268,76 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                     ),
                   ),
                 ),
+                // Branch Selector
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                  child: DropdownButtonFormField<int>(
+                    initialValue: _selectedBranchId,
+                    decoration: const InputDecoration(
+                      labelText: 'Select Branch to Count',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: _branches
+                        .map(
+                          (b) => DropdownMenuItem<int>(
+                            value: b['id'],
+                            child: Text(b['name']),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (val) {
+                      if (val != null) {
+                        setState(() {
+                          _selectedBranchId = val;
+                          _isLoading = true; // Trigger reload
+                        });
+                        _loadProducts();
+                      }
+                    },
+                  ),
+                ),
+                const SizedBox(height: 8),
                 Expanded(
                   child: ListView.separated(
                     itemCount: _products.length,
                     separatorBuilder: (ctx, i) => const Divider(),
                     itemBuilder: (ctx, i) {
                       final p = _products[i];
-                      return Padding(
+
+                      // Determine Row State
+                      bool isLocked = _locked[p.id] == true;
+                      bool isVerified = _verified[p.id] == true;
+                      int attempts = _attempts[p.id] ?? 0;
+
+                      Color? rowColor;
+                      if (isLocked) {
+                        rowColor = Colors.red.shade50;
+                      } else if (isVerified) {
+                        rowColor = Colors.green.shade50;
+                      } else if (attempts > 0) {
+                        rowColor = Colors.orange.shade50;
+                      }
+
+                      return Container(
+                        color: rowColor,
                         padding: const EdgeInsets.symmetric(
                           horizontal: 16.0,
                           vertical: 8.0,
                         ),
                         child: Row(
                           children: [
+                            // Status Icon
+                            if (isLocked)
+                              const Icon(Icons.lock, color: Colors.red),
+                            if (isVerified)
+                              const Icon(
+                                Icons.check_circle,
+                                color: Colors.green,
+                              ),
+                            if (attempts > 0 && !isLocked && !isVerified)
+                              const Icon(Icons.warning, color: Colors.orange),
+                            const SizedBox(width: 8),
+
                             Expanded(
                               flex: 3,
                               child: Column(
@@ -195,13 +353,25 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                                     'SKU: ${p.sku}',
                                     style: const TextStyle(color: Colors.grey),
                                   ),
-                                  // In blind mode, maybe hide system stock?
-                                  // Or show it for "Variance" check?
-                                  // Let's show it for MVP transparency.
-                                  Text(
-                                    'System Stock: ${p.stockLevel}',
-                                    style: const TextStyle(color: Colors.blue),
-                                  ),
+
+                                  // HIDE SYSTEM STOCK IN BLIND MODE
+                                  // Text('System Stock: ${p.stockLevel}', style: const TextStyle(color: Colors.blue)),
+                                  if (isLocked)
+                                    Text(
+                                      'Failed 3 Attempts. Escalated.',
+                                      style: TextStyle(
+                                        color: Colors.red.shade700,
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                  if (attempts > 0 && !isLocked && !isVerified)
+                                    Text(
+                                      '$attempts/3 Attempts Failed',
+                                      style: TextStyle(
+                                        color: Colors.orange.shade800,
+                                        fontSize: 12,
+                                      ),
+                                    ),
                                 ],
                               ),
                             ),
@@ -209,10 +379,18 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                               flex: 2,
                               child: TextFormField(
                                 initialValue: '0',
+                                enabled:
+                                    !isLocked &&
+                                    !isVerified, // Disable if locked/verified
                                 keyboardType: TextInputType.number,
-                                decoration: const InputDecoration(
+                                decoration: InputDecoration(
                                   labelText: 'Actual',
-                                  border: OutlineInputBorder(),
+                                  border: const OutlineInputBorder(),
+                                  fillColor: Colors.white,
+                                  filled: true,
+                                  suffixIcon: isLocked
+                                      ? const Icon(Icons.lock_outline, size: 16)
+                                      : null,
                                 ),
                                 onChanged: (val) => _updateCount(p.id!, val),
                               ),
@@ -229,12 +407,12 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                     width: double.infinity,
                     height: 50,
                     child: ElevatedButton(
-                      onPressed: _submitStockTake,
+                      onPressed: _verifyCounts,
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.green,
+                        backgroundColor: Colors.blueAccent,
                         foregroundColor: Colors.white,
                       ),
-                      child: const Text('FINALIZE STOCK TAKE'),
+                      child: const Text('VERIFY COUNTS'),
                     ),
                   ),
                 ),

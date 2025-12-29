@@ -13,5 +13,6 @@ router.get('/alerts', inventoryController.getLowStockItems);
 // Sensitive Actions
 router.post('/adjust', requireRole(['admin', 'manager']), inventoryController.adjustStock);
 router.post('/transfer', requireRole(['admin', 'manager']), inventoryController.createTransfer);
+router.get('/product/:productId/branches', inventoryController.getStockByBranch);
 
 module.exports = router;

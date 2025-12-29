@@ -192,23 +192,46 @@ class _StockTransferScreenState extends State<StockTransferScreen> {
                     children: [
                       Expanded(
                         flex: 3,
-                        child: DropdownButtonFormField<Product>(
-                          key: ValueKey(_selectedProduct),
-                          initialValue: _selectedProduct,
-                          decoration: const InputDecoration(
-                            labelText: 'Select Product',
-                            border: OutlineInputBorder(),
-                          ),
-                          items: _products
-                              .map(
-                                (p) => DropdownMenuItem<Product>(
-                                  value: p,
-                                  child: Text(p.name),
-                                ),
-                              )
-                              .toList(),
-                          onChanged: (val) =>
-                              setState(() => _selectedProduct = val),
+                        child: LayoutBuilder(
+                          builder: (context, constraints) {
+                            return Autocomplete<Product>(
+                              displayStringForOption: (Product option) =>
+                                  option.name,
+                              optionsBuilder:
+                                  (TextEditingValue textEditingValue) {
+                                    if (textEditingValue.text.isEmpty) {
+                                      return const Iterable<Product>.empty();
+                                    }
+                                    return _products.where((Product option) {
+                                      return option.name.toLowerCase().contains(
+                                        textEditingValue.text.toLowerCase(),
+                                      );
+                                    });
+                                  },
+                              onSelected: (Product selection) {
+                                setState(() {
+                                  _selectedProduct = selection;
+                                });
+                              },
+                              fieldViewBuilder:
+                                  (
+                                    context,
+                                    textEditingController,
+                                    focusNode,
+                                    onFieldSubmitted,
+                                  ) {
+                                    return TextField(
+                                      controller: textEditingController,
+                                      focusNode: focusNode,
+                                      decoration: const InputDecoration(
+                                        labelText: 'Search Product',
+                                        border: OutlineInputBorder(),
+                                        prefixIcon: Icon(Icons.search),
+                                      ),
+                                    );
+                                  },
+                            );
+                          },
                         ),
                       ),
                       const SizedBox(width: 16),

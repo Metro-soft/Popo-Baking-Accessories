@@ -1,8 +1,8 @@
+import 'package:flutter/foundation.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../inventory/models/product_model.dart';
-import '../../procurement/models/supplier.dart';
 
 class ApiService {
   // Singleton Pattern
@@ -13,6 +13,9 @@ class ApiService {
   // Use localhost:5000 as per backend env
   static const String baseUrl = 'http://localhost:5000/api';
   String? _token;
+
+  // Auth State Notifier
+  final ValueNotifier<bool> authState = ValueNotifier(false);
 
   bool get isAuthenticated => _token != null;
 
@@ -28,6 +31,7 @@ class ApiService {
       _token = data['token'];
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('auth_token', _token!);
+      authState.value = true;
     } else {
       throw Exception('Login Failed: ${response.body}');
     }
@@ -36,10 +40,12 @@ class ApiService {
   Future<void> loadToken() async {
     final prefs = await SharedPreferences.getInstance();
     _token = prefs.getString('auth_token');
+    authState.value = _token != null;
   }
 
   Future<void> logout() async {
     _token = null;
+    authState.value = false;
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('auth_token');
   }
@@ -58,6 +64,12 @@ class ApiService {
     http.Response response, {
     String defaultMessage = 'Request failed',
   }) {
+    if (response.statusCode == 401 || response.statusCode == 403) {
+      // Auto logout on auth error
+      logout();
+      throw Exception('Session expired. Please log in again.');
+    }
+
     if (response.statusCode >= 400) {
       String message = '$defaultMessage (Status: ${response.statusCode})';
       try {
@@ -74,11 +86,12 @@ class ApiService {
     }
   }
 
-  Future<List<Product>> getProducts() async {
-    final response = await http.get(
-      Uri.parse('$baseUrl/products'),
-      headers: _headers,
-    );
+  Future<List<Product>> getProducts({int? branchId}) async {
+    String url = '$baseUrl/products';
+    if (branchId != null) {
+      url += '?branchId=$branchId';
+    }
+    final response = await http.get(Uri.parse(url), headers: _headers);
     _handleError(response, defaultMessage: 'Failed to load products');
     List<dynamic> body = jsonDecode(response.body);
     return body.map((dynamic item) => Product.fromJson(item)).toList();
@@ -125,28 +138,6 @@ class ApiService {
   }
 
   // Supplier & PO Methods (Keeping existing functionality)
-  Future<List<dynamic>> getSuppliers() async {
-    final response = await http.get(
-      Uri.parse('$baseUrl/suppliers'),
-      headers: _headers,
-    );
-    if (response.statusCode == 200) {
-      return jsonDecode(response.body);
-    } else {
-      throw Exception('Failed to load suppliers');
-    }
-  }
-
-  Future<void> createSupplier(Supplier supplier) async {
-    final response = await http.post(
-      Uri.parse('$baseUrl/suppliers'),
-      headers: _headers,
-      body: jsonEncode(supplier.toJson()),
-    );
-    if (response.statusCode != 200) {
-      throw Exception('Failed to create supplier');
-    }
-  }
 
   Future<Map<String, dynamic>> createPurchaseOrder(
     Map<String, dynamic> poData,
@@ -207,18 +198,6 @@ class ApiService {
     }
   }
 
-  Future<List<dynamic>> getCustomers() async {
-    final response = await http.get(
-      Uri.parse('$baseUrl/customers'),
-      headers: _headers,
-    );
-    if (response.statusCode == 200) {
-      return jsonDecode(response.body);
-    } else {
-      throw Exception('Failed to load customers');
-    }
-  }
-
   Future<void> processTransaction(Map<String, dynamic> payload) async {
     final response = await http.post(
       Uri.parse('$baseUrl/sales/transaction'),
@@ -273,16 +252,23 @@ class ApiService {
   Future<void> adjustStock(
     int productId,
     double quantity,
-    String reason,
-  ) async {
+    String reason, {
+    int? branchId,
+  }) async {
+    final Map<String, dynamic> body = {
+      'productId': productId,
+      'quantityChange': quantity,
+      'reason': reason,
+    };
+
+    if (branchId != null) {
+      body['branchId'] = branchId;
+    }
+
     final response = await http.post(
       Uri.parse('$baseUrl/inventory/adjust'),
       headers: _headers,
-      body: jsonEncode({
-        'productId': productId,
-        'quantityChange': quantity,
-        'reason': reason,
-      }),
+      body: jsonEncode(body),
     );
     if (response.statusCode != 200) {
       throw Exception('Failed to adjust stock: ${response.body}');
@@ -311,15 +297,7 @@ class ApiService {
   }
 
   Future<List<dynamic>> getBranches() async {
-    final response = await http.get(
-      Uri.parse('$baseUrl/branches'),
-      headers: _headers,
-    );
-    if (response.statusCode == 200) {
-      return jsonDecode(response.body);
-    } else {
-      throw Exception('Failed to load branches');
-    }
+    return getLocations();
   }
 
   // --- Cash Management ---
@@ -503,6 +481,183 @@ class ApiService {
       headers: _headers,
     );
     _handleError(response, defaultMessage: 'Failed to load history');
+    return jsonDecode(response.body);
+  }
+
+  Future<List<dynamic>> getStockByBranch(int productId) async {
+    final response = await http.get(
+      Uri.parse('$baseUrl/inventory/product/$productId/branches'),
+      headers: _headers,
+    );
+    _handleError(response, defaultMessage: 'Failed to load branch stock');
+    return jsonDecode(response.body);
+  }
+
+  // Locations (Mother/Child)
+  Future<List<dynamic>> getLocations() async {
+    final response = await http.get(
+      Uri.parse('$baseUrl/locations'),
+      headers: _headers,
+    );
+    _handleError(response, defaultMessage: 'Failed to load locations');
+    return jsonDecode(response.body);
+  }
+
+  Future<void> createLocation(Map<String, dynamic> data) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/locations'),
+      headers: _headers,
+      body: jsonEncode(data),
+    );
+    if (response.statusCode != 201) {
+      _handleError(response, defaultMessage: 'Failed to create location');
+    }
+  }
+
+  // --- Reports & Analytics ---
+  Future<List<dynamic>> getAuditReport({
+    int? branchId,
+    String? startDate,
+    String? endDate,
+  }) async {
+    String url = '$baseUrl/reports/audit?';
+    if (branchId != null) url += 'branchId=$branchId&';
+    if (startDate != null) url += 'startDate=$startDate&';
+    if (endDate != null) url += 'endDate=$endDate&';
+
+    final response = await http.get(Uri.parse(url), headers: _headers);
+    _handleError(response, defaultMessage: 'Failed to generate audit report');
+    return jsonDecode(response.body);
+  }
+
+  Future<List<dynamic>> getSalesPerformanceReport({
+    int? branchId,
+    String? startDate,
+    String? endDate,
+  }) async {
+    String url = '$baseUrl/reports/sales?';
+    if (branchId != null) url += 'branchId=$branchId&';
+    if (startDate != null) url += 'startDate=$startDate&';
+    if (endDate != null) url += 'endDate=$endDate&';
+
+    final response = await http.get(Uri.parse(url), headers: _headers);
+    _handleError(response, defaultMessage: 'Failed to generate sales report');
+    return jsonDecode(response.body);
+  }
+
+  Future<List<dynamic>> getInventoryValuation({int? branchId}) async {
+    String url = '$baseUrl/reports/valuation?';
+    if (branchId != null) url += 'branchId=$branchId';
+
+    final response = await http.get(Uri.parse(url), headers: _headers);
+    _handleError(
+      response,
+      defaultMessage: 'Failed to generate valuation report',
+    );
+    return jsonDecode(response.body);
+  }
+
+  Future<List<dynamic>> getLowStockReport({int? branchId}) async {
+    // Use the existing Inventory Alerts endpoint which now supports filtering
+    String url = '$baseUrl/inventory/alerts?';
+    if (branchId != null) url += 'branchId=$branchId';
+
+    final response = await http.get(Uri.parse(url), headers: _headers);
+    _handleError(
+      response,
+      defaultMessage: 'Failed to generate low stock report',
+    );
+    return jsonDecode(response.body);
+  }
+
+  // --- Partners (Suppliers & Customers) ---
+
+  Future<List<dynamic>> getSuppliers() async {
+    final response = await http.get(
+      Uri.parse('$baseUrl/partners/suppliers'),
+      headers: _headers,
+    );
+    _handleError(response, defaultMessage: 'Failed to load suppliers');
+    return jsonDecode(response.body);
+  }
+
+  Future<void> createSupplier(Map<String, dynamic> data) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/partners/suppliers'),
+      headers: _headers,
+      body: jsonEncode(data),
+    );
+    _handleError(response, defaultMessage: 'Failed to create supplier');
+  }
+
+  Future<void> updateSupplier(int id, Map<String, dynamic> data) async {
+    final response = await http.put(
+      Uri.parse('$baseUrl/partners/suppliers/$id'),
+      headers: _headers,
+      body: jsonEncode(data),
+    );
+    _handleError(response, defaultMessage: 'Failed to update supplier');
+  }
+
+  Future<void> deleteSupplier(int id) async {
+    final response = await http.delete(
+      Uri.parse('$baseUrl/partners/suppliers/$id'),
+      headers: _headers,
+    );
+    _handleError(response, defaultMessage: 'Failed to delete supplier');
+  }
+
+  Future<List<dynamic>> getSupplierTransactions(int id) async {
+    final response = await http.get(
+      Uri.parse('$baseUrl/partners/suppliers/$id/transactions'),
+      headers: _headers,
+    );
+    _handleError(response, defaultMessage: 'Failed to load transactions');
+    return jsonDecode(response.body);
+  }
+
+  // Customers (Using Partners API)
+  Future<List<dynamic>> getCustomers() async {
+    final response = await http.get(
+      Uri.parse('$baseUrl/partners/customers'),
+      headers: _headers,
+    );
+    _handleError(response, defaultMessage: 'Failed to load customers');
+    return jsonDecode(response.body);
+  }
+
+  Future<void> createCustomer(Map<String, dynamic> data) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/partners/customers'),
+      headers: _headers,
+      body: jsonEncode(data),
+    );
+    _handleError(response, defaultMessage: 'Failed to create customer');
+  }
+
+  Future<void> updateCustomer(int id, Map<String, dynamic> data) async {
+    final response = await http.put(
+      Uri.parse('$baseUrl/partners/customers/$id'),
+      headers: _headers,
+      body: jsonEncode(data),
+    );
+    _handleError(response, defaultMessage: 'Failed to update customer');
+  }
+
+  Future<void> deleteCustomer(int id) async {
+    final response = await http.delete(
+      Uri.parse('$baseUrl/partners/customers/$id'),
+      headers: _headers,
+    );
+    _handleError(response, defaultMessage: 'Failed to delete customer');
+  }
+
+  Future<List<dynamic>> getCustomerTransactions(int id) async {
+    final response = await http.get(
+      Uri.parse('$baseUrl/partners/customers/$id/transactions'),
+      headers: _headers,
+    );
+    _handleError(response, defaultMessage: 'Failed to load transactions');
     return jsonDecode(response.body);
   }
 }

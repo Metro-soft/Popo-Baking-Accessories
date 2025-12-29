@@ -16,7 +16,17 @@ exports.processTransaction = async (req, res) => {
     try {
         await client.query('BEGIN');
 
-        // 2. Calculate Totals
+        // [NEW] Get User Branch or Default
+        // We assume req.user is set by auth middleware. 
+        const userId = req.user ? req.user.id : null;
+        let branchId = 1; // Default to Head Office
+
+        if (userId) {
+            const userRes = await client.query('SELECT branch_id FROM users WHERE id = $1', [userId]);
+            if (userRes.rows.length > 0) {
+                branchId = userRes.rows[0].branch_id || 1;
+            }
+        }
         let orderTotal = 0;
         let depositTotal = 0;
         // Discount logic
@@ -41,9 +51,9 @@ exports.processTransaction = async (req, res) => {
         const orderStatus = isHold ? 'held' : 'completed';
 
         const orderRes = await client.query(
-            `INSERT INTO orders (customer_id, total_amount, total_deposit, status, discount_amount, discount_reason, is_hold) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-            [customerId || null, orderTotal, depositTotal, orderStatus, discount, discountReason || null, isHold || false]
+            `INSERT INTO orders (customer_id, total_amount, total_deposit, status, discount_amount, discount_reason, is_hold, branch_id) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+            [customerId || null, orderTotal, depositTotal, orderStatus, discount, discountReason || null, isHold || false, branchId]
         );
         const orderId = orderRes.rows[0].id;
 
@@ -94,11 +104,16 @@ exports.processTransaction = async (req, res) => {
                 } else {
                     // SALE: DECREASE STOCK (Existing Logic)
                     // Find batches with stock
+                    // SALE: DECREASE STOCK (Existing Logic)
+                    // Use the branchId fetched at the start
+
+
+                    // Find batches with stock AT THIS BRANCH
                     const batches = await client.query(
                         `SELECT id, quantity_remaining FROM inventory_batches 
-                        WHERE product_id = $1 AND quantity_remaining > 0 
+                        WHERE product_id = $1 AND quantity_remaining > 0 AND branch_id = $2
                         ORDER BY received_at ASC`,
-                        [productId]
+                        [productId, branchId]
                     );
 
 

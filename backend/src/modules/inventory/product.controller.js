@@ -95,13 +95,23 @@ exports.createProduct = async (req, res) => {
 
 exports.getProducts = async (req, res) => {
     try {
-        const result = await db.query(`
+        const { branchId } = req.query;
+        let query = `
             SELECT p.*, COALESCE(SUM(ib.quantity_remaining), 0) as stock_level
             FROM products p
-            LEFT JOIN inventory_batches ib ON p.id = ib.product_id
-            GROUP BY p.id
-            ORDER BY p.created_at DESC
-        `);
+        `;
+
+        const params = [];
+        if (branchId) {
+            query += ` LEFT JOIN inventory_batches ib ON p.id = ib.product_id AND ib.branch_id = $1`;
+            params.push(branchId);
+        } else {
+            query += ` LEFT JOIN inventory_batches ib ON p.id = ib.product_id`;
+        }
+
+        query += ` GROUP BY p.id ORDER BY p.created_at DESC`;
+
+        const result = await db.query(query, params);
         // Note: stock_level comes as string from COUNT/SUM usually, convert in frontend or cast here?
         // JS driver often returns BigInt as string. Parsing in frontend map is safer.
         res.json(result.rows);
