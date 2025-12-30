@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
 import '../../core/services/api_service.dart';
 import 'package:intl/intl.dart';
+import '../widgets/supplier_payment_dialog.dart';
+import '../widgets/transaction_details_dialog.dart';
+import 'package:url_launcher/url_launcher.dart';
+import '../../core/services/statement_pdf_service.dart';
 
 class SuppliersTab extends StatefulWidget {
   const SuppliersTab({super.key});
@@ -43,8 +47,8 @@ class _SuppliersTabState extends State<SuppliersTab> {
   Future<void> _loadTransactions(int supplierId) async {
     setState(() => _isLoadingTransactions = true);
     try {
-      final data = await _apiService.getSupplierTransactions(supplierId);
-      setState(() => _transactions = data);
+      final data = await _apiService.getSupplierStatement(supplierId);
+      setState(() => _transactions = data['transactions'] ?? []);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -80,6 +84,9 @@ class _SuppliersTabState extends State<SuppliersTab> {
     );
     final taxIdController = TextEditingController(
       text: supplier?['tax_id'] ?? '',
+    );
+    final openingBalanceController = TextEditingController(
+      text: supplier?['opening_balance']?.toString() ?? '0',
     );
 
     await showDialog(
@@ -139,6 +146,18 @@ class _SuppliersTabState extends State<SuppliersTab> {
                   border: OutlineInputBorder(),
                 ),
               ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: openingBalanceController,
+                decoration: const InputDecoration(
+                  labelText: 'Opening Balance (Old Debt)',
+                  helperText: 'Amount owed BEFORE system',
+                  border: OutlineInputBorder(),
+                ),
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+              ),
             ],
           ),
         ),
@@ -159,6 +178,8 @@ class _SuppliersTabState extends State<SuppliersTab> {
                 'email': emailController.text,
                 'address': addressController.text,
                 'tax_id': taxIdController.text,
+                'opening_balance':
+                    double.tryParse(openingBalanceController.text) ?? 0,
               };
               navigator.pop();
 
@@ -219,8 +240,39 @@ class _SuppliersTabState extends State<SuppliersTab> {
     }
   }
 
+  void _showPaymentDialog() {
+    if (_selectedSupplier == null) return;
+    showDialog(
+      context: context,
+      builder: (context) => SupplierPaymentDialog(
+        supplier: _selectedSupplier!,
+        onSuccess: () {
+          _loadSuppliers(); // Refresh list to update balance (if shown)
+          _loadTransactions(_selectedSupplier!['id']); // Refresh history
+        },
+      ),
+    );
+  }
+
+  void _showTransactionDetails(Map<String, dynamic> item) {
+    if (item['type'] == 'payment') {
+      return; // Payments don't have deep details yet, except referencing a PO maybe
+    }
+
+    showDialog(
+      context: context,
+      builder: (context) => TransactionDetailsDialog(
+        transactionId: item['id'],
+        type: 'bill',
+        title: 'Purchase Order Details',
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final format = NumberFormat("#,##0.00", "en_US");
+
     if (_isLoading) return const Center(child: CircularProgressIndicator());
 
     return Scaffold(
@@ -308,6 +360,12 @@ class _SuppliersTabState extends State<SuppliersTab> {
                               final supplier = _suppliers[index];
                               final isSelected =
                                   _selectedSupplier?['id'] == supplier['id'];
+                              final balance =
+                                  double.tryParse(
+                                    supplier['current_balance']?.toString() ??
+                                        '0',
+                                  ) ??
+                                  0;
 
                               return InkWell(
                                 onTap: () => _onSelectSupplier(supplier),
@@ -329,8 +387,8 @@ class _SuppliersTabState extends State<SuppliersTab> {
                                         ? []
                                         : [
                                             BoxShadow(
-                                              color: Colors.black.withOpacity(
-                                                0.02,
+                                              color: Colors.black.withValues(
+                                                alpha: 0.02,
                                               ),
                                               blurRadius: 4,
                                               offset: const Offset(0, 2),
@@ -377,6 +435,32 @@ class _SuppliersTabState extends State<SuppliersTab> {
                                           ],
                                         ),
                                       ),
+                                      // Balance Badge
+                                      if (balance > 0)
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 8,
+                                            vertical: 2,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: Colors.red[50],
+                                            borderRadius: BorderRadius.circular(
+                                              8,
+                                            ),
+                                            border: Border.all(
+                                              color: Colors.red[100]!,
+                                            ),
+                                          ),
+                                          child: Text(
+                                            'KES ${NumberFormat.compact().format(balance)}',
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.red[800],
+                                            ),
+                                          ),
+                                        ),
+                                      const SizedBox(width: 4),
                                       PopupMenuButton(
                                         icon: const Icon(
                                           Icons.more_vert,
@@ -414,12 +498,14 @@ class _SuppliersTabState extends State<SuppliersTab> {
                                           ),
                                         ],
                                         onSelected: (value) {
-                                          if (value == 'edit')
+                                          if (value == 'edit') {
                                             _showSupplierDialog(
                                               supplier: supplier,
                                             );
-                                          if (value == 'delete')
+                                          }
+                                          if (value == 'delete') {
                                             _deleteSupplier(supplier['id']);
+                                          }
                                         },
                                       ),
                                     ],
@@ -459,213 +545,412 @@ class _SuppliersTabState extends State<SuppliersTab> {
                         ],
                       ),
                     )
-                  : Column(
+                  : Stack(
                       children: [
-                        // Header
-                        Container(
-                          padding: const EdgeInsets.all(24.0),
-                          decoration: const BoxDecoration(
-                            color: Colors.white,
-                            border: Border(
-                              bottom: BorderSide(color: Colors.black12),
-                            ),
-                          ),
-                          child: Row(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  color: Colors.orange[50],
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: const Icon(
-                                  Icons.local_shipping_outlined,
-                                  color: Colors.orange,
-                                  size: 32,
+                        Column(
+                          children: [
+                            // Header
+                            Container(
+                              padding: const EdgeInsets.all(24.0),
+                              decoration: const BoxDecoration(
+                                color: Colors.white,
+                                border: Border(
+                                  bottom: BorderSide(color: Colors.black12),
                                 ),
                               ),
-                              const SizedBox(width: 16),
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
+                              child: Row(
                                 children: [
-                                  Text(
-                                    _selectedSupplier!['name'],
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .headlineSmall
-                                        ?.copyWith(fontWeight: FontWeight.bold),
+                                  Container(
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      color: Colors.orange[50],
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: const Icon(
+                                      Icons.local_shipping_outlined,
+                                      color: Colors.orange,
+                                      size: 32,
+                                    ),
                                   ),
-                                  const SizedBox(height: 4),
+                                  const SizedBox(width: 16),
+                                  Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        _selectedSupplier!['name'],
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .headlineSmall
+                                            ?.copyWith(
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Row(
+                                        children: [
+                                          Icon(
+                                            Icons.confirmation_number_outlined,
+                                            size: 16,
+                                            color: Colors.grey[600],
+                                          ),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            'Tax ID: ${_selectedSupplier!['tax_id'] ?? 'N/A'}',
+                                            style: TextStyle(
+                                              color: Colors.grey[600],
+                                            ),
+                                          ),
+                                          const SizedBox(width: 16),
+                                          Icon(
+                                            Icons.person_outline,
+                                            size: 16,
+                                            color: Colors.grey[600],
+                                          ),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            _selectedSupplier!['contact_person'] ??
+                                                'N/A',
+                                            style: TextStyle(
+                                              color: Colors.grey[600],
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                  const Spacer(),
+                                  // Action Buttons
                                   Row(
                                     children: [
-                                      Icon(
-                                        Icons.confirmation_number_outlined,
-                                        size: 16,
-                                        color: Colors.grey[600],
+                                      IconButton(
+                                        onPressed: () async {
+                                          final showDetails = await showDialog<bool>(
+                                            context: context,
+                                            builder: (context) => SimpleDialog(
+                                              title: const Text(
+                                                'Select Statement Type',
+                                              ),
+                                              children: [
+                                                SimpleDialogOption(
+                                                  onPressed: () =>
+                                                      Navigator.pop(
+                                                        context,
+                                                        false,
+                                                      ),
+                                                  child: const Padding(
+                                                    padding:
+                                                        EdgeInsets.symmetric(
+                                                          vertical: 8,
+                                                        ),
+                                                    child: Text(
+                                                      'Summary (Total Only)',
+                                                    ),
+                                                  ),
+                                                ),
+                                                SimpleDialogOption(
+                                                  onPressed: () =>
+                                                      Navigator.pop(
+                                                        context,
+                                                        true,
+                                                      ),
+                                                  child: const Padding(
+                                                    padding:
+                                                        EdgeInsets.symmetric(
+                                                          vertical: 8,
+                                                        ),
+                                                    child: Text(
+                                                      'Detailed (With Line Items)',
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          );
+
+                                          if (showDetails == null) return;
+
+                                          await StatementPdfService.printStatement(
+                                            party: _selectedSupplier!,
+                                            transactions: _transactions,
+                                            type: 'Supplier',
+                                            showDetails: showDetails,
+                                          );
+                                        },
+                                        icon: const Icon(Icons.print),
+                                        tooltip: 'Print Statement',
                                       ),
-                                      const SizedBox(width: 4),
-                                      Text(
-                                        'Tax ID: ${_selectedSupplier!['tax_id'] ?? 'N/A'}',
+                                      IconButton(
+                                        onPressed: () async {
+                                          final phone =
+                                              _selectedSupplier!['phone']
+                                                  ?.toString()
+                                                  .replaceAll(
+                                                    RegExp(r'[^0-9]'),
+                                                    '',
+                                                  ) ??
+                                              '';
+                                          if (phone.isEmpty) {
+                                            ScaffoldMessenger.of(
+                                              context,
+                                            ).showSnackBar(
+                                              const SnackBar(
+                                                content: Text(
+                                                  'No phone number available',
+                                                ),
+                                              ),
+                                            );
+                                            return;
+                                          }
+                                          final balance =
+                                              double.tryParse(
+                                                _selectedSupplier!['current_balance']
+                                                        ?.toString() ??
+                                                    '0',
+                                              ) ??
+                                              0;
+                                          final message = Uri.encodeComponent(
+                                            'Hello ${_selectedSupplier!['name']}, find your statement attached. Outstanding Balance: KES ${format.format(balance)}.',
+                                          );
+                                          final url = Uri.parse(
+                                            'https://wa.me/$phone?text=$message',
+                                          );
+
+                                          try {
+                                            await launchUrl(
+                                              url,
+                                              mode: LaunchMode
+                                                  .externalApplication,
+                                            );
+                                          } catch (e) {
+                                            if (context.mounted) {
+                                              ScaffoldMessenger.of(
+                                                context,
+                                              ).showSnackBar(
+                                                SnackBar(
+                                                  content: Text(
+                                                    'Could not launch WhatsApp: $e',
+                                                  ),
+                                                ),
+                                              );
+                                            }
+                                          }
+                                        },
+                                        icon: const Icon(
+                                          Icons.share,
+                                        ), // Using share icon as generic share/whatsapp
+                                        tooltip: 'Share on WhatsApp',
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(width: 16),
+                                  // Debt Summary
+                                  Column(
+                                    crossAxisAlignment: CrossAxisAlignment.end,
+                                    children: [
+                                      const Text(
+                                        'Outstanding Balance',
                                         style: TextStyle(
-                                          color: Colors.grey[600],
+                                          color: Colors.grey,
+                                          fontSize: 12,
                                         ),
                                       ),
-                                      const SizedBox(width: 16),
-                                      Icon(
-                                        Icons.person_outline,
-                                        size: 16,
-                                        color: Colors.grey[600],
-                                      ),
-                                      const SizedBox(width: 4),
                                       Text(
-                                        _selectedSupplier!['contact_person'] ??
-                                            'N/A',
-                                        style: TextStyle(
-                                          color: Colors.grey[600],
+                                        'KES ${format.format(double.tryParse(_selectedSupplier!['current_balance']?.toString() ?? '0') ?? 0)}',
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 18,
+                                          color: Colors.red,
                                         ),
                                       ),
                                     ],
                                   ),
                                 ],
                               ),
-                            ],
-                          ),
-                        ),
+                            ),
 
-                        // Transaction List
-                        Expanded(
-                          child: _isLoadingTransactions
-                              ? const Center(child: CircularProgressIndicator())
-                              : _transactions.isEmpty
-                              ? Center(
-                                  child: Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Icon(
-                                        Icons.receipt_long_outlined,
-                                        size: 48,
-                                        color: Colors.grey[300],
-                                      ),
-                                      const SizedBox(height: 16),
-                                      const Text(
-                                        'No purchase orders recorded',
-                                        style: TextStyle(color: Colors.grey),
-                                      ),
-                                    ],
-                                  ),
-                                )
-                              : ListView.builder(
-                                  padding: const EdgeInsets.all(16),
-                                  itemCount: _transactions.length,
-                                  itemBuilder: (context, index) {
-                                    final po = _transactions[index];
-                                    final date = DateFormat(
-                                      'MMM dd, yyyy',
-                                    ).format(DateTime.parse(po['created_at']));
-                                    final amount =
-                                        double.tryParse(
-                                          po['total_amount'].toString(),
-                                        ) ??
-                                        0;
-
-                                    return Card(
-                                      elevation: 0,
-                                      shape: RoundedRectangleBorder(
-                                        side: BorderSide(
-                                          color: Colors.grey[200]!,
-                                        ),
-                                        borderRadius: BorderRadius.circular(12),
-                                      ),
-                                      margin: const EdgeInsets.only(bottom: 12),
-                                      child: ListTile(
-                                        contentPadding:
-                                            const EdgeInsets.symmetric(
-                                              horizontal: 20,
-                                              vertical: 8,
+                            // Statement List
+                            Expanded(
+                              child: _isLoadingTransactions
+                                  ? const Center(
+                                      child: CircularProgressIndicator(),
+                                    )
+                                  : _transactions.isEmpty
+                                  ? Center(
+                                      child: Column(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.center,
+                                        children: [
+                                          Icon(
+                                            Icons.receipt_long_outlined,
+                                            size: 48,
+                                            color: Colors.grey[300],
+                                          ),
+                                          const SizedBox(height: 16),
+                                          const Text(
+                                            'No recorded transactions',
+                                            style: TextStyle(
+                                              color: Colors.grey,
                                             ),
-                                        leading: Container(
-                                          padding: const EdgeInsets.all(10),
-                                          decoration: BoxDecoration(
-                                            color: Colors.blue[50],
+                                          ),
+                                        ],
+                                      ),
+                                    )
+                                  : ListView.builder(
+                                      padding: const EdgeInsets.fromLTRB(
+                                        16,
+                                        16,
+                                        16,
+                                        80,
+                                      ),
+                                      itemCount: _transactions.length,
+                                      itemBuilder: (context, index) {
+                                        final item = _transactions[index];
+                                        final isPayment =
+                                            item['type'] == 'payment';
+                                        final date = DateFormat(
+                                          'MMM dd, yyyy',
+                                        ).format(DateTime.parse(item['date']));
+                                        final amount =
+                                            double.tryParse(
+                                              item['amount'].toString(),
+                                            ) ??
+                                            0;
+
+                                        return Card(
+                                          elevation: 0,
+                                          shape: RoundedRectangleBorder(
+                                            side: BorderSide(
+                                              color: isPayment
+                                                  ? Colors.blue[100]!
+                                                  : Colors.grey[200]!,
+                                            ),
                                             borderRadius: BorderRadius.circular(
-                                              8,
+                                              12,
                                             ),
                                           ),
-                                          child: const Icon(
-                                            Icons.inventory_2_outlined,
-                                            color: Colors.blue,
+                                          margin: const EdgeInsets.only(
+                                            bottom: 12,
                                           ),
-                                        ),
-                                        title: Text(
-                                          'Purchase Order #${po['id']}',
-                                          style: const TextStyle(
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                        ),
-                                        subtitle: Padding(
-                                          padding: const EdgeInsets.only(
-                                            top: 6.0,
-                                          ),
-                                          child: Row(
-                                            children: [
-                                              Container(
-                                                padding:
-                                                    const EdgeInsets.symmetric(
-                                                      horizontal: 8,
-                                                      vertical: 2,
-                                                    ),
-                                                decoration: BoxDecoration(
-                                                  color: Colors.grey[100],
-                                                  borderRadius:
-                                                      BorderRadius.circular(4),
+                                          child: ListTile(
+                                            onTap: () =>
+                                                _showTransactionDetails(item),
+                                            contentPadding:
+                                                const EdgeInsets.symmetric(
+                                                  horizontal: 20,
+                                                  vertical: 8,
                                                 ),
-                                                child: Text(
-                                                  po['status'].toUpperCase(),
-                                                  style: const TextStyle(
-                                                    fontSize: 11,
-                                                    fontWeight: FontWeight.bold,
-                                                    color: Colors.black54,
-                                                  ),
-                                                ),
+                                            leading: Container(
+                                              padding: const EdgeInsets.all(10),
+                                              decoration: BoxDecoration(
+                                                color: isPayment
+                                                    ? Colors.green[50]
+                                                    : Colors.blue[50],
+                                                borderRadius:
+                                                    BorderRadius.circular(8),
                                               ),
-                                              const SizedBox(width: 12),
-                                              Text(
-                                                date,
-                                                style: TextStyle(
-                                                  color: Colors.grey[500],
-                                                  fontSize: 13,
-                                                ),
+                                              child: Icon(
+                                                isPayment
+                                                    ? Icons.payment
+                                                    : Icons
+                                                          .inventory_2_outlined,
+                                                color: isPayment
+                                                    ? Colors.green
+                                                    : Colors.blue,
                                               ),
-                                            ],
-                                          ),
-                                        ),
-                                        trailing: Column(
-                                          mainAxisAlignment:
-                                              MainAxisAlignment.center,
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.end,
-                                          children: [
-                                            Text(
-                                              'KES ${NumberFormat("#,##0.00").format(amount)}',
+                                            ),
+                                            title: Text(
+                                              isPayment
+                                                  ? 'Payment Out${item['method'] != null ? ' (${item['method']})' : ''}'
+                                                  : 'Purchase Bill #${item['id']}',
                                               style: const TextStyle(
                                                 fontWeight: FontWeight.bold,
-                                                fontSize: 16,
                                               ),
                                             ),
-                                            const SizedBox(height: 4),
-                                            Text(
-                                              '${po['item_count']} Items',
-                                              style: TextStyle(
-                                                color: Colors.grey[500],
-                                                fontSize: 12,
-                                              ),
+                                            subtitle: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                const SizedBox(height: 4),
+                                                Text(
+                                                  date,
+                                                  style: TextStyle(
+                                                    color: Colors.grey[500],
+                                                    fontSize: 13,
+                                                  ),
+                                                ),
+                                                if (isPayment &&
+                                                    item['reference'] != null)
+                                                  Text(
+                                                    'Ref: ${item['reference']}',
+                                                    style: TextStyle(
+                                                      color: Colors.grey[700],
+                                                      fontSize: 12,
+                                                    ),
+                                                  ),
+                                              ],
                                             ),
-                                          ],
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                ),
+                                            trailing: Column(
+                                              mainAxisAlignment:
+                                                  MainAxisAlignment.center,
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.end,
+                                              children: [
+                                                Text(
+                                                  '${isPayment ? '-' : '+'} KES ${format.format(amount)}',
+                                                  style: TextStyle(
+                                                    fontWeight: FontWeight.bold,
+                                                    fontSize: 16,
+                                                    color: isPayment
+                                                        ? Colors.green[700]
+                                                        : Colors.black87,
+                                                  ),
+                                                ),
+                                                if (!isPayment)
+                                                  Container(
+                                                    margin:
+                                                        const EdgeInsets.only(
+                                                          top: 4,
+                                                        ),
+                                                    padding:
+                                                        const EdgeInsets.symmetric(
+                                                          horizontal: 6,
+                                                          vertical: 2,
+                                                        ),
+                                                    decoration: BoxDecoration(
+                                                      color: Colors.grey[200],
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                            4,
+                                                          ),
+                                                    ),
+                                                    child: const Text(
+                                                      'View Bill',
+                                                      style: TextStyle(
+                                                        fontSize: 10,
+                                                      ),
+                                                    ),
+                                                  ),
+                                              ],
+                                            ),
+                                          ),
+                                        );
+                                      },
+                                    ),
+                            ),
+                          ],
+                        ),
+                        // Floating Action Button for Payment
+                        Positioned(
+                          bottom: 24,
+                          right: 24,
+                          child: FloatingActionButton.extended(
+                            onPressed: _showPaymentDialog,
+                            backgroundColor: Colors.blue,
+                            foregroundColor: Colors.white,
+                            icon: const Icon(Icons.payment),
+                            label: const Text('Record Payment'),
+                          ),
                         ),
                       ],
                     ),

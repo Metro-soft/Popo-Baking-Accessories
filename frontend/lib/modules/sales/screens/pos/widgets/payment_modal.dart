@@ -41,19 +41,19 @@ class _PaymentModalState extends State<PaymentModal> {
   }
 
   void _submit() {
-    final amt = _enteredAmount;
-    if (amt <= 0) return;
-
-    if (_isCredit && !_canOfferCredit) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Credit Limit Exceeded. Cannot proceed with Credit payment.',
-          ),
-        ),
-      );
+    // If Full Credit, we send NO payments.
+    if (_method == 'credit') {
+      if (!_canOfferCredit) {
+        // Should be blocked by UI, but double check
+        return;
+      }
+      widget.onConfirm([]); // Empty/No payments = Full Debt
+      Navigator.pop(context);
       return;
     }
+
+    final amt = _enteredAmount;
+    if (amt <= 0) return;
 
     widget.onConfirm([
       {'method': _method, 'amount': amt, 'referenceCode': _refCtrl.text},
@@ -69,8 +69,11 @@ class _PaymentModalState extends State<PaymentModal> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (widget.customer != null && !_canOfferCredit)
+            if (widget.customer != null &&
+                !_canOfferCredit &&
+                _method == 'credit')
               Container(
+                margin: const EdgeInsets.only(bottom: 15),
                 padding: const EdgeInsets.all(8),
                 color: Colors.red[50],
                 child: Row(
@@ -86,7 +89,6 @@ class _PaymentModalState extends State<PaymentModal> {
                   ],
                 ),
               ),
-            const SizedBox(height: 10),
             DropdownButtonFormField<String>(
               initialValue: _method,
               items: const [
@@ -94,14 +96,16 @@ class _PaymentModalState extends State<PaymentModal> {
                 DropdownMenuItem(value: 'mpesa', child: Text('M-Pesa')),
                 DropdownMenuItem(
                   value: 'credit',
-                  child: Text('On Account (Credit)'),
+                  child: Text('On Account (Full Credit)'),
                 ),
               ],
               onChanged: (v) {
                 setState(() => _method = v!);
                 if (_method == 'credit' && widget.customer == null) {
-                  // Prevent switching if no customer
-                  setState(() => _method = 'cash');
+                  // Force back to cash if no customer
+                  Future.delayed(Duration.zero, () {
+                    setState(() => _method = 'cash');
+                  });
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
                       content: Text(
@@ -117,14 +121,40 @@ class _PaymentModalState extends State<PaymentModal> {
               ),
             ),
             const SizedBox(height: 15),
-            TextField(
-              controller: _amountCtrl,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: 'Amount (KES)',
-                border: OutlineInputBorder(),
+
+            // Amount Field - Hidden if Full Credit
+            if (_method != 'credit')
+              TextField(
+                controller: _amountCtrl,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Amount Paid (KES)',
+                  border: OutlineInputBorder(),
+                  helperText: 'Enter amount received. Balance acts as debt.',
+                ),
+              )
+            else
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.blue[50],
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.blue[100]!),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.info, color: Colors.blue),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Full amount (KES ${widget.totalAmount.toStringAsFixed(2)}) will be added to ${widget.customer?['name'] ?? 'Customer'}\'s debt.',
+                        style: TextStyle(color: Colors.blue[900]),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
+
             if (_method == 'mpesa')
               Padding(
                 padding: const EdgeInsets.only(top: 15),
@@ -145,7 +175,7 @@ class _PaymentModalState extends State<PaymentModal> {
           child: const Text('Cancel'),
         ),
         ElevatedButton(
-          onPressed: _submit,
+          onPressed: (_method == 'credit' && !_canOfferCredit) ? null : _submit,
           style: ElevatedButton.styleFrom(
             backgroundColor: _isCredit && !_canOfferCredit
                 ? Colors.grey

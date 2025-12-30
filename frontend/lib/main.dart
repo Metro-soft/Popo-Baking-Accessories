@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'modules/core/screens/login_screen.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -8,7 +9,20 @@ import 'modules/core/services/api_service.dart';
 const Color kPrimaryColor = Color(0xFFA01B2D); // Deep Red from Logo
 
 void main() {
-  runApp(const PopoBakingApp());
+  runZonedGuarded(
+    () {
+      WidgetsFlutterBinding.ensureInitialized();
+      FlutterError.onError = (FlutterErrorDetails details) {
+        FlutterError.presentError(details);
+        debugPrint('Caught Framework Error: ${details.exception}');
+      };
+
+      runApp(const PopoBakingApp());
+    },
+    (error, stack) {
+      debugPrint('Caught Global Async Error: $error');
+    },
+  );
 }
 
 class PopoBakingApp extends StatefulWidget {

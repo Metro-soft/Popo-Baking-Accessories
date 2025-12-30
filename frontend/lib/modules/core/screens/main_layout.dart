@@ -10,8 +10,9 @@ import '../../inventory/screens/stock_take_screen.dart';
 // Sales
 import '../../sales/screens/pos/pos_screen.dart';
 import '../../sales/screens/sales/invoice_list_screen.dart';
+import '../../sales/screens/sales/payments_in_screen.dart';
 import '../../sales/screens/logistics/dispatch_screen.dart';
-// Finance
+// Finance import verified
 import '../../finance/screens/cash_management_screen.dart';
 
 import '../../analytics/screens/dashboard/dashboard_screen.dart';
@@ -19,6 +20,7 @@ import '../../admin/branch_management_screen.dart';
 import '../../reports/screens/reports_hub_screen.dart';
 import '../../admin/screens/user_activity_screen.dart';
 import '../../partners/screens/partners_screen.dart';
+import '../../settings/screens/settings_screen.dart';
 
 class MainLayout extends StatefulWidget {
   const MainLayout({super.key});
@@ -52,7 +54,7 @@ class _MainLayoutState extends State<MainLayout> {
       case 'sales_orders':
         return const POSScreen();
       case 'payments_in':
-        return const PlaceholderScreen(title: 'Payments In');
+        return const PaymentsInScreen();
       case 'estimates':
         return const PlaceholderScreen(title: 'Estimates / Quotations');
       case 'dispatch':
@@ -93,7 +95,7 @@ class _MainLayoutState extends State<MainLayout> {
         return const UserActivityScreen();
 
       case 'settings':
-        return const PlaceholderScreen(title: 'Settings');
+        return const SettingsScreen();
       case 'backups':
         return const PlaceholderScreen(title: 'Backups / Restore');
       case 'utilities':

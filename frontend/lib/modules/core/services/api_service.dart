@@ -20,11 +20,10 @@ class ApiService {
   bool get isAuthenticated => _token != null;
 
   Future<void> login(String email, String password) async {
-    final response = await http.post(
-      Uri.parse('$baseUrl/auth/login'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'email': email, 'password': password}),
-    );
+    final response = await _post('/auth/login', {
+      'email': email,
+      'password': password,
+    });
 
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body);
@@ -60,12 +59,17 @@ class ApiService {
     return headers;
   }
 
+  Future<Map<String, String>> getHeaders() async {
+    return _headers;
+  }
+
+  static const Duration _timeout = Duration(seconds: 15);
+
   void _handleError(
     http.Response response, {
     String defaultMessage = 'Request failed',
   }) {
     if (response.statusCode == 401 || response.statusCode == 403) {
-      // Auto logout on auth error
       logout();
       throw Exception('Session expired. Please log in again.');
     }
@@ -86,32 +90,109 @@ class ApiService {
     }
   }
 
+  Future<http.Response> _get(String endpoint) async {
+    try {
+      final response = await http
+          .get(Uri.parse('$baseUrl$endpoint'), headers: _headers)
+          .timeout(
+            _timeout,
+            onTimeout: () => throw Exception(
+              'Connection timed out. Please check your internet.',
+            ),
+          );
+      return response;
+    } catch (e) {
+      if (e.toString().contains('SocketException')) {
+        throw Exception('Network error. Is the server running?');
+      }
+      rethrow;
+    }
+  }
+
+  Future<http.Response> _post(String endpoint, Object? body) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$baseUrl$endpoint'),
+            headers: _headers,
+            body: body is String ? body : jsonEncode(body),
+          )
+          .timeout(
+            _timeout,
+            onTimeout: () => throw Exception(
+              'Connection timed out. Please check your internet.',
+            ),
+          );
+      return response;
+    } catch (e) {
+      if (e.toString().contains('SocketException')) {
+        throw Exception('Network error. Is the server running?');
+      }
+      rethrow;
+    }
+  }
+
+  Future<http.Response> _put(String endpoint, Object? body) async {
+    try {
+      final response = await http
+          .put(
+            Uri.parse('$baseUrl$endpoint'),
+            headers: _headers,
+            body: body is String ? body : jsonEncode(body),
+          )
+          .timeout(
+            _timeout,
+            onTimeout: () => throw Exception(
+              'Connection timed out. Please check your internet.',
+            ),
+          );
+      return response;
+    } catch (e) {
+      if (e.toString().contains('SocketException')) {
+        throw Exception('Network error. Is the server running?');
+      }
+      rethrow;
+    }
+  }
+
+  Future<http.Response> _delete(String endpoint) async {
+    try {
+      final response = await http
+          .delete(Uri.parse('$baseUrl$endpoint'), headers: _headers)
+          .timeout(
+            _timeout,
+            onTimeout: () => throw Exception(
+              'Connection timed out. Please check your internet.',
+            ),
+          );
+      return response;
+    } catch (e) {
+      if (e.toString().contains('SocketException')) {
+        throw Exception('Network error. Is the server running?');
+      }
+      rethrow;
+    }
+  }
+
   Future<List<Product>> getProducts({int? branchId}) async {
-    String url = '$baseUrl/products';
+    String url = '/products';
     if (branchId != null) {
       url += '?branchId=$branchId';
     }
-    final response = await http.get(Uri.parse(url), headers: _headers);
+    final response = await _get(url);
     _handleError(response, defaultMessage: 'Failed to load products');
     List<dynamic> body = jsonDecode(response.body);
     return body.map((dynamic item) => Product.fromJson(item)).toList();
   }
 
   Future<Product> getProductById(int id) async {
-    final response = await http.get(
-      Uri.parse('$baseUrl/products/$id'),
-      headers: _headers,
-    );
+    final response = await _get('/products/$id');
     _handleError(response, defaultMessage: 'Failed to load product');
     return Product.fromJson(jsonDecode(response.body));
   }
 
   Future<Product> createProduct(Product product) async {
-    final response = await http.post(
-      Uri.parse('$baseUrl/products'),
-      headers: _headers,
-      body: jsonEncode(product.toJson()),
-    );
+    final response = await _post('/products', product.toJson());
 
     if (response.statusCode == 200 || response.statusCode == 201) {
       return Product.fromJson(jsonDecode(response.body));
@@ -121,11 +202,8 @@ class ApiService {
   }
 
   Future<Product?> findProductByName(String name) async {
-    final response = await http.get(
-      Uri.parse(
-        '$baseUrl/products/check-name?name=${Uri.encodeComponent(name)}',
-      ),
-      headers: _headers,
+    final response = await _get(
+      '/products/check-name?name=${Uri.encodeComponent(name)}',
     );
 
     if (response.statusCode == 200) {
@@ -142,11 +220,7 @@ class ApiService {
   Future<Map<String, dynamic>> createPurchaseOrder(
     Map<String, dynamic> poData,
   ) async {
-    final response = await http.post(
-      Uri.parse('$baseUrl/purchase-orders'),
-      headers: _headers,
-      body: jsonEncode(poData),
-    );
+    final response = await _post('/purchase-orders', poData);
     if (response.statusCode == 200) {
       return jsonDecode(response.body);
     } else {
@@ -159,14 +233,10 @@ class ApiService {
     double transport,
     double packaging,
   ) async {
-    final response = await http.post(
-      Uri.parse('$baseUrl/purchase-orders/$poId/receive'),
-      headers: _headers,
-      body: jsonEncode({
-        'transport_cost': transport,
-        'packaging_cost': packaging,
-      }),
-    );
+    final response = await _post('/purchase-orders/$poId/receive', {
+      'transport_cost': transport,
+      'packaging_cost': packaging,
+    });
     if (response.statusCode != 200) {
       throw Exception('Failed to receive PO: ${response.body}');
     }
@@ -265,11 +335,7 @@ class ApiService {
       body['branchId'] = branchId;
     }
 
-    final response = await http.post(
-      Uri.parse('$baseUrl/inventory/adjust'),
-      headers: _headers,
-      body: jsonEncode(body),
-    );
+    final response = await _post('/inventory/adjust', body);
     if (response.statusCode != 200) {
       throw Exception('Failed to adjust stock: ${response.body}');
     }
@@ -618,46 +684,118 @@ class ApiService {
 
   // Customers (Using Partners API)
   Future<List<dynamic>> getCustomers() async {
-    final response = await http.get(
-      Uri.parse('$baseUrl/partners/customers'),
-      headers: _headers,
-    );
+    final response = await _get('/partners/customers');
     _handleError(response, defaultMessage: 'Failed to load customers');
     return jsonDecode(response.body);
   }
 
   Future<void> createCustomer(Map<String, dynamic> data) async {
-    final response = await http.post(
-      Uri.parse('$baseUrl/partners/customers'),
-      headers: _headers,
-      body: jsonEncode(data),
-    );
+    final response = await _post('/partners/customers', data);
     _handleError(response, defaultMessage: 'Failed to create customer');
   }
 
   Future<void> updateCustomer(int id, Map<String, dynamic> data) async {
-    final response = await http.put(
-      Uri.parse('$baseUrl/partners/customers/$id'),
-      headers: _headers,
-      body: jsonEncode(data),
-    );
+    final response = await _put('/partners/customers/$id', data);
     _handleError(response, defaultMessage: 'Failed to update customer');
   }
 
   Future<void> deleteCustomer(int id) async {
-    final response = await http.delete(
-      Uri.parse('$baseUrl/partners/customers/$id'),
-      headers: _headers,
-    );
+    final response = await _delete('/partners/customers/$id');
     _handleError(response, defaultMessage: 'Failed to delete customer');
   }
 
   Future<List<dynamic>> getCustomerTransactions(int id) async {
-    final response = await http.get(
-      Uri.parse('$baseUrl/partners/customers/$id/transactions'),
-      headers: _headers,
-    );
+    final response = await _get('/partners/customers/$id/transactions');
     _handleError(response, defaultMessage: 'Failed to load transactions');
     return jsonDecode(response.body);
+  }
+
+  Future<void> addCustomerPayment(
+    int customerId,
+    double amount,
+    String method,
+    String note, {
+    int? orderId,
+  }) async {
+    final Map<String, dynamic> body = {
+      'amount': amount,
+      'method': method,
+      'notes': note,
+    };
+    if (orderId != null) {
+      body['order_id'] = orderId;
+    }
+    final response = await _post(
+      '/partners/customers/$customerId/payments',
+      body,
+    );
+    _handleError(response, defaultMessage: 'Failed to record payment');
+  }
+
+  Future<List<dynamic>> getCustomerUnpaidOrders(int customerId) async {
+    final response = await _get(
+      '/partners/customers/$customerId/unpaid-orders',
+    );
+    _handleError(response, defaultMessage: 'Failed to load unpaid orders');
+    return jsonDecode(response.body);
+  }
+
+  Future<List<dynamic>> getPaymentsIn() async {
+    final response = await _get('/partners/payments');
+    _handleError(response, defaultMessage: 'Failed to load payments');
+    return jsonDecode(response.body);
+  }
+
+  Future<Map<String, dynamic>> getCustomerStatement(int customerId) async {
+    final response = await _get('/partners/customers/$customerId/statement');
+    _handleError(response, defaultMessage: 'Failed to load statement');
+    return jsonDecode(response.body);
+  }
+
+  // --- Supplier Payments & Details ---
+
+  Future<void> addSupplierPayment(
+    int supplierId,
+    Map<String, dynamic> data,
+  ) async {
+    final response = await _post(
+      '/partners/suppliers/$supplierId/payments',
+      data,
+    );
+    _handleError(response, defaultMessage: 'Failed to record supplier payment');
+  }
+
+  Future<Map<String, dynamic>> getSupplierStatement(int supplierId) async {
+    final response = await _get('/partners/suppliers/$supplierId/statement');
+    _handleError(response, defaultMessage: 'Failed to load statement');
+    return jsonDecode(response.body);
+  }
+
+  Future<List<dynamic>> getPaymentsOut() async {
+    final response = await _get('/partners/payments-out');
+    _handleError(response, defaultMessage: 'Failed to load payments out');
+    return jsonDecode(response.body);
+  }
+
+  Future<Map<String, dynamic>> getPurchaseOrderDetails(int poId) async {
+    final response = await _get('/partners/suppliers/orders/$poId');
+    _handleError(response, defaultMessage: 'Failed to load PO details');
+    // Ensure response body is a Map
+    final decoded = jsonDecode(response.body);
+    if (decoded is List) {
+      return decoded.first; // Handle if array returned (unlikely)
+    }
+    return decoded;
+  }
+
+  Future<Map<String, dynamic>> getOrderDetails(int orderId) async {
+    final response = await _get('/sales/orders/$orderId');
+    _handleError(response, defaultMessage: 'Failed to load order details');
+    // Ensure response body is a Map
+    final decoded = jsonDecode(response.body);
+    if (decoded is List) {
+      return decoded.first;
+    }
+    return decoded;
   }
 }

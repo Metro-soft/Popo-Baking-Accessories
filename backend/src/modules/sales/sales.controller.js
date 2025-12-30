@@ -1,14 +1,21 @@
 const db = require('../../config/db');
 
 exports.processTransaction = async (req, res) => {
-    const { customerId, items, payments, discountAmount, discountReason, isHold } = req.body; // Added new fields
+    const { customerId, items, payments, discountAmount, discountReason, isHold } = req.body;
+    console.log('Processing Transaction - Payload:', JSON.stringify(req.body, null, 2));
+    console.log('Extracted CustomerID:', customerId, 'Type:', typeof customerId);
 
     // 1. Validation
     if (!items || !Array.isArray(items) || items.length === 0) {
         return res.status(400).json({ error: 'No items in cart' });
     }
+
+    // Allow empty payments ONLY if it's a hold OR if a customer is selected (Credit Sale)
     if (!isHold && (!payments || !Array.isArray(payments) || payments.length === 0)) {
-        return res.status(400).json({ error: 'No payments provided for completed order' });
+        if (!customerId) {
+            return res.status(400).json({ error: 'No payments provided. For Credit/Pay Later, a customer must be selected.' });
+        }
+        // If customerId is present, we proceed (assuming it's a credit sale, logic below handles balance)
     }
 
     const client = await db.pool.connect();
@@ -17,9 +24,8 @@ exports.processTransaction = async (req, res) => {
         await client.query('BEGIN');
 
         // [NEW] Get User Branch or Default
-        // We assume req.user is set by auth middleware. 
         const userId = req.user ? req.user.id : null;
-        let branchId = 1; // Default to Head Office
+        let branchId = 1; // Default
 
         if (userId) {
             const userRes = await client.query('SELECT branch_id FROM users WHERE id = $1', [userId]);
@@ -35,20 +41,40 @@ exports.processTransaction = async (req, res) => {
 
         for (const item of items) {
             if (item.quantity === 0) throw new Error(`Invalid Quantity for Product ${item.productId}`);
-            orderTotal += (item.quantity * item.unitPrice); // Quantity can be negative for returns
+            orderTotal += (item.quantity * item.unitPrice);
             if (item.type === 'asset_rental') {
                 depositTotal += (item.depositAmount || 0);
                 orderTotal += (item.depositAmount || 0);
             }
         }
 
-        // Apply discount (ensure total doesn't go below 0 unless it's a net refund)
-        // If orderTotal is negative (Net Return), discount shouldn't apply usually, but let's allow flexibility.
+        // Apply discount
         orderTotal -= discount;
+        const totalPayable = orderTotal; // Keep track of final bill
+
+        // 2. Validate Payment / Credit Logic
+        // Calculate Total Paid
+        let totalPaid = 0;
+        if (payments && Array.isArray(payments)) {
+            totalPaid = payments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
+        }
+
+        const balance = totalPayable - totalPaid;
+        const isCreditSale = balance > 0; // If they paid LESS than total, it's credit/debt.
+
+        // [CRITICAL FIX] If Credit Sale, Customer is REQUIRED.
+        if (isCreditSale && !customerId) {
+            throw new Error('Customer is required for Credit/Pay Later sales. Please register "Walk-in" as a customer if you want to offer debt.');
+        }
 
         // 3. Create Order
-        // Status: 'held' if parking, else 'completed'
-        const orderStatus = isHold ? 'held' : 'completed';
+        // Status: 'held' if parking. 
+        // If Credit Sale (balance > 0) -> 'pending_payment'
+        // If Full Paid -> 'completed'
+        let orderStatus = isHold ? 'held' : 'completed';
+        if (!isHold && isCreditSale) {
+            orderStatus = 'pending_payment';
+        }
 
         const orderRes = await client.query(
             `INSERT INTO orders (customer_id, total_amount, total_deposit, status, discount_amount, discount_reason, is_hold, branch_id) 
@@ -57,7 +83,7 @@ exports.processTransaction = async (req, res) => {
         );
         const orderId = orderRes.rows[0].id;
 
-        // 4. Process Items (The "Smart Switch")
+        // 4. Process Items (Inventory Deduction)
         for (const item of items) {
             const { productId, quantity, type, unitPrice, serialNumber, depositAmount } = item;
             const subtotal = (quantity * unitPrice) + (depositAmount || 0);
@@ -75,8 +101,6 @@ exports.processTransaction = async (req, res) => {
             if (isHold) continue;
 
             if (type === 'retail') {
-                // RETAIL LOGIC (Handle Returns: Negative Quantity)
-
                 if (quantity < 0) {
                     // RETURN: INCREASE STOCK
                     const absQty = Math.abs(quantity);
@@ -84,17 +108,12 @@ exports.processTransaction = async (req, res) => {
                         `SELECT id FROM inventory_batches WHERE product_id = $1 ORDER BY received_at DESC LIMIT 1`,
                         [productId]
                     );
-
                     if (latestBatch.rows.length > 0) {
                         await client.query(
                             `UPDATE inventory_batches SET quantity_remaining = quantity_remaining + $1 WHERE id = $2`,
                             [absQty, latestBatch.rows[0].id]
                         );
-                    } else {
-                        console.warn(`[RETURN] No batch found for returned product ${productId}`);
                     }
-
-                    // [NEW] Log Return
                     await client.query(
                         `INSERT INTO stock_movements (product_id, type, quantity, reason, reference_id)
                          VALUES ($1, 'return', $2, 'Order Return', $3)`,
@@ -102,13 +121,7 @@ exports.processTransaction = async (req, res) => {
                     );
 
                 } else {
-                    // SALE: DECREASE STOCK (Existing Logic)
-                    // Find batches with stock
-                    // SALE: DECREASE STOCK (Existing Logic)
-                    // Use the branchId fetched at the start
-
-
-                    // Find batches with stock AT THIS BRANCH
+                    // SALE: DECREASE STOCK
                     const batches = await client.query(
                         `SELECT id, quantity_remaining FROM inventory_batches 
                         WHERE product_id = $1 AND quantity_remaining > 0 AND branch_id = $2
@@ -116,18 +129,14 @@ exports.processTransaction = async (req, res) => {
                         [productId, branchId]
                     );
 
-
                     let qtyToDeduct = quantity;
                     for (const batch of batches.rows) {
                         if (qtyToDeduct <= 0) break;
-
                         const deduct = Math.min(batch.quantity_remaining, qtyToDeduct);
-
                         await client.query(
                             `UPDATE inventory_batches SET quantity_remaining = quantity_remaining - $1 WHERE id = $2`,
                             [deduct, batch.id]
                         );
-
                         qtyToDeduct -= deduct;
                     }
 
@@ -135,46 +144,26 @@ exports.processTransaction = async (req, res) => {
                         console.warn(`[STOCK] Product ${productId} went negative by ${qtyToDeduct}`);
                     }
 
-                    // [NEW] Log Sale (Negative Quantity)
-                    // We log the FULL quantity as sold, even if partially deducted (accounting wise)
-                    // or strictly what was deducted? Typically sold amount.
                     await client.query(
                         `INSERT INTO stock_movements (product_id, type, quantity, reason, reference_id)
                          VALUES ($1, 'sale', $2, 'Order Sale', $3)`,
                         [productId, -quantity, orderId]
                     );
                 }
-            } else if (type === 'asset_rental') {
-                // UPDATE ASSET STATUS
-                // Note: We need a rental_assets table for serials.
-                // If serialNumber provided, mark it rented.
-                if (serialNumber) {
-                    // Check if exists first (if we have that table seeded)
-                    // For MVP, we might skip strict FK if table empty.
-                    // But let's assume strictness.
-                    // await client.query(`UPDATE rental_assets SET status = 'rented' WHERE serial_number = $1`, [serialNumber]);
-                }
-
             } else if (type === 'service_print') {
-                // DEDUCT RAW MATERIALS
-                // Hardcoded Logic for A4/A5/A6 based on SKU or Name
-                // We need to fetch SKU to know what it is.
+                // DEDUCT RAW MATERIALS (Paper) logic same as before...
+                // (Snippet omitted for brevity in diff, assume logic holds or copied if replacing block heavily)
                 const prodQ = await client.query('SELECT sku FROM products WHERE id = $1', [productId]);
                 const sku = prodQ.rows[0]?.sku;
-
-                let paperSku = 'MAT-EDIBLE-A4'; // Default
+                let paperSku = 'MAT-EDIBLE-A4';
                 let deduction = 1.0;
+                if (sku && sku.includes('A5')) deduction = 0.5;
+                if (sku && sku.includes('A6')) deduction = 0.25;
+                if (sku && sku.includes('NON')) paperSku = 'MAT-GLOSSY-A4';
 
-                if (sku.includes('A5')) deduction = 0.5;
-                if (sku.includes('A6')) deduction = 0.25;
-                if (sku.includes('NON')) paperSku = 'MAT-GLOSSY-A4';
-
-                // Find Raw Material ID
                 const rawMat = await client.query('SELECT id FROM products WHERE sku = $1', [paperSku]);
                 if (rawMat.rows.length > 0) {
                     const rawId = rawMat.rows[0].id;
-                    // Deduct from batches (Same logic as Retail)
-                    // ... (Repeating the loop logic slightly simplified for brevity)
                     await client.query(
                         `UPDATE inventory_batches 
                          SET quantity_remaining = quantity_remaining - $1 
@@ -186,19 +175,53 @@ exports.processTransaction = async (req, res) => {
             }
         }
 
-        // 5. Process Payments - SKIP IF HELD
+        // 5. Customer Profile Update (Steps: Debt & Points)
+        if (!isHold && customerId) {
+            // A. Update Debt if Balance > 0
+            if (balance > 0) {
+                await client.query(
+                    `UPDATE customers SET current_debt = current_debt + $1 WHERE id = $2`,
+                    [balance, customerId]
+                );
+            }
+
+            // B. Add Points if Fully Paid (balance <= 0)
+            // Logic: 1 Point per 100 KES spent
+            if (balance <= 0 && totalPayable > 0) {
+                const pointsEarned = Math.floor(totalPayable / 100);
+                if (pointsEarned > 0) {
+                    await client.query(
+                        `UPDATE customers SET points = points + $1 WHERE id = $2`,
+                        [pointsEarned, customerId]
+                    );
+                }
+            }
+        }
+
+        // 6. Process Payments
         if (!isHold && payments) {
             for (const p of payments) {
+                // A. Record in Order Payments (Link to specific order)
                 await client.query(
                     `INSERT INTO payments (order_id, method, amount, reference_code) VALUES ($1, $2, $3, $4)`,
                     [orderId, p.method, p.amount, p.referenceCode || null]
                 );
+
+                // B. Record in Customer Ledger (Unified Transaction History)
+                // We only record in ledger if there is a customer attached.
+                // Note: We do NOT update debt here, because the "balance" logic above already handled the net debt change.
+                if (customerId) {
+                    await client.query(
+                        `INSERT INTO customer_payments (customer_id, order_id, amount, method, notes, payment_date) 
+                         VALUES ($1, $2, $3, $4, $5, NOW())`,
+                        [customerId, orderId, p.amount, p.method, `POS Sale #${orderId}`]
+                    );
+                }
             }
         }
 
         await client.query('COMMIT');
         res.status(201).json({ message: 'Transaction Successful', orderId });
-
     } catch (err) {
         await client.query('ROLLBACK');
         console.error('Transaction Error:', err);

@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../../core/services/api_service.dart';
+import '../widgets/customer_form_panel.dart';
+import '../widgets/transaction_details_dialog.dart';
+import 'package:url_launcher/url_launcher.dart';
+import '../../core/services/statement_pdf_service.dart';
 
 class CustomersTab extends StatefulWidget {
   const CustomersTab({super.key});
@@ -43,8 +47,8 @@ class _CustomersTabState extends State<CustomersTab> {
   Future<void> _loadTransactions(int customerId) async {
     setState(() => _isLoadingTransactions = true);
     try {
-      final data = await _apiService.getCustomerTransactions(customerId);
-      setState(() => _transactions = data);
+      final data = await _apiService.getCustomerStatement(customerId);
+      setState(() => _transactions = data['transactions'] ?? []);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -55,164 +59,98 @@ class _CustomersTabState extends State<CustomersTab> {
     }
   }
 
+  bool _isEditing = false; // New State for Panel Mode
+
   void _onSelectCustomer(Map<String, dynamic> customer) {
     setState(() {
       _selectedCustomer = customer;
+      _isEditing = false; // Switch to view mode
       _transactions = []; // Clear previous
     });
     _loadTransactions(customer['id']);
   }
 
-  Future<void> _showCustomerDialog({Map<String, dynamic>? customer}) async {
-    final isEditing = customer != null;
-    final nameController = TextEditingController(text: customer?['name'] ?? '');
-    final phoneController = TextEditingController(
-      text: customer?['phone'] ?? '',
-    );
-    final altPhoneController = TextEditingController(
-      text: customer?['alt_phone'] ?? '',
-    );
-    final emailController = TextEditingController(
-      text: customer?['email'] ?? '',
-    );
-    final addressController = TextEditingController(
-      text: customer?['address'] ?? '',
-    );
-    final limitController = TextEditingController(
-      text: customer?['credit_limit']?.toString() ?? '0',
-    );
+  void _startCreating() {
+    setState(() {
+      _selectedCustomer = null;
+      _isEditing = true;
+    });
+  }
 
-    await showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(isEditing ? 'Edit Customer' : 'Add Customer'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.AxisSize.min,
-            children: [
-              TextField(
-                controller: nameController,
-                decoration: const InputDecoration(
-                  labelText: 'Customer Name',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: phoneController,
-                decoration: const InputDecoration(
-                  labelText: 'Phone (Primary)',
-                  border: OutlineInputBorder(),
-                ),
-                keyboardType: TextInputType.phone,
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: altPhoneController,
-                decoration: const InputDecoration(
-                  labelText: 'Alternative Phone (Optional)',
-                  border: OutlineInputBorder(),
-                ),
-                keyboardType: TextInputType.phone,
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: emailController,
-                decoration: const InputDecoration(
-                  labelText: 'Email',
-                  border: OutlineInputBorder(),
-                ),
-                keyboardType: TextInputType.emailAddress,
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: addressController,
-                decoration: const InputDecoration(
-                  labelText: 'Delivery Landmark / Pickup Point',
-                  border: OutlineInputBorder(),
-                  prefixIcon: Icon(Icons.local_shipping_outlined),
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: limitController,
-                decoration: const InputDecoration(
-                  labelText: 'Credit Limit (KES)',
-                  border: OutlineInputBorder(),
-                ),
-                keyboardType: const TextInputType.numberWithOptions(
-                  decimal: true,
-                ),
-              ),
-            ],
+  void _startEditing() {
+    setState(() {
+      _isEditing = true;
+    });
+  }
+
+  void _cancelForm() {
+    setState(() {
+      // If we were creating, go back to nothing. If editing, go back to details.
+      if (_selectedCustomer == null) {
+        _isEditing = false;
+      } else {
+        _isEditing = false;
+      }
+    });
+  }
+
+  Future<void> _handleFormSave(Map<String, dynamic> data) async {
+    final isUpdate = _selectedCustomer != null;
+
+    // Optimistic / Loading state if needed
+
+    try {
+      if (isUpdate) {
+        await _apiService.updateCustomer(_selectedCustomer!['id'], data);
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Customer updated successfully'),
+            backgroundColor: Colors.green,
           ),
+        );
+      } else {
+        await _apiService.createCustomer(data);
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Customer created successfully'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+
+      // Refresh
+      await _loadCustomers();
+
+      // Update Selection
+      if (isUpdate) {
+        final updated = _customers.firstWhere(
+          (c) => c['id'] == _selectedCustomer!['id'],
+          orElse: () => null,
+        );
+        if (updated != null) {
+          setState(() {
+            _selectedCustomer = updated;
+            _isEditing = false;
+          });
+        }
+      } else {
+        // If created, maybe select the new one? For now just go to list
+        setState(() {
+          _isEditing = false;
+          // Ideally find the new customer and select it, but we can leave it unselected for now
+        });
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error saving: $e'),
+          backgroundColor: Colors.red,
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () async {
-              final navigator = Navigator.of(context);
-              final messenger = ScaffoldMessenger.of(context);
-
-              final data = {
-                'name': nameController.text,
-                'phone': phoneController.text,
-                'alt_phone': altPhoneController.text,
-                'email': emailController.text,
-                'address': addressController.text,
-                'credit_limit': double.tryParse(limitController.text) ?? 0,
-              };
-              navigator.pop();
-
-              try {
-                if (isEditing) {
-                  await _apiService.updateCustomer(customer['id'], data);
-                } else {
-                  await _apiService.createCustomer(data);
-                }
-                if (!mounted) return;
-
-                // Reload list
-                await _loadCustomers();
-
-                // Fix: Sync selected customer if editing
-                if (isEditing &&
-                    _selectedCustomer != null &&
-                    _selectedCustomer!['id'] == customer['id']) {
-                  final updated = _customers.firstWhere(
-                    (c) => c['id'] == customer['id'],
-                    orElse: () => null,
-                  );
-                  if (updated != null) {
-                    setState(() => _selectedCustomer = updated);
-                  }
-                }
-              } catch (e) {
-                if (!mounted) return;
-
-                String errorMessage = 'Error: $e';
-                if (e.toString().contains('already exists')) {
-                  errorMessage =
-                      'This phone number is already registered to another customer.';
-                }
-
-                messenger.showSnackBar(
-                  SnackBar(
-                    content: Text(errorMessage),
-                    backgroundColor: Colors.red,
-                    behavior: SnackBarBehavior.floating,
-                  ),
-                );
-              }
-            },
-            child: Text(isEditing ? 'Save Changes' : 'Add Customer'),
-          ),
-        ],
-      ),
-    );
+      );
+    }
   }
 
   Future<void> _deleteCustomer(int id) async {
@@ -252,6 +190,197 @@ class _CustomersTabState extends State<CustomersTab> {
         ).showSnackBar(SnackBar(content: Text('Error: $e')));
       }
     }
+  }
+
+  Future<void> _showPaymentDialog() async {
+    if (_selectedCustomer == null) return;
+    final customerId = _selectedCustomer!['id'];
+
+    // Load un-paid orders first
+    debugPrint('Opening Payment Dialog for Customer: $customerId');
+    List<dynamic> unpaidOrders = [];
+    try {
+      unpaidOrders = await _apiService.getCustomerUnpaidOrders(customerId);
+    } catch (e) {
+      // Ignore or show warning, still allow generic payment
+      print('Failed to load unpaid orders: $e');
+    }
+
+    final amountController = TextEditingController();
+    final notesController = TextEditingController();
+    String method = 'M-Pesa'; // Default
+    int? selectedOrderId;
+
+    if (!mounted) return;
+
+    await showDialog(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (sbContext, setDialogState) {
+          return AlertDialog(
+            title: const Text('Receive Payment'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  DropdownButtonFormField<int>(
+                    key: ValueKey(selectedOrderId),
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Link to Order (Optional)',
+                      border: OutlineInputBorder(),
+                      helperText: 'Select an order to pay off specific debt',
+                    ),
+                    initialValue: selectedOrderId,
+                    items: [
+                      const DropdownMenuItem<int>(
+                        value: null,
+                        child: Text('None (General Payment)'),
+                      ),
+                      ...unpaidOrders.map((order) {
+                        final date = DateFormat(
+                          'MMM dd',
+                        ).format(DateTime.parse(order['created_at']));
+                        final amount =
+                            double.tryParse(order['total_amount'].toString()) ??
+                            0;
+                        return DropdownMenuItem<int>(
+                          value: order['id'],
+                          child: Text(
+                            'Order #${order['id']} - $date (KES $amount)',
+                          ),
+                        );
+                      }),
+                    ],
+                    onChanged: (val) {
+                      setDialogState(() {
+                        selectedOrderId = val;
+                        if (val != null) {
+                          // Auto-fill amount from order
+                          final order = unpaidOrders.firstWhere(
+                            (o) => o['id'] == val,
+                          );
+                          amountController.text = order['total_amount']
+                              .toString();
+                        } else {
+                          amountController.clear();
+                        }
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: amountController,
+                    decoration: const InputDecoration(
+                      labelText: 'Amount (KES)',
+                      border: OutlineInputBorder(),
+                      prefixText: 'KES ',
+                    ),
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<String>(
+                    key: ValueKey(method),
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Payment Method',
+                      border: OutlineInputBorder(),
+                    ),
+                    initialValue: method,
+                    items:
+                        ['Cash', 'M-Pesa', 'Bank Transfer', 'Cheque', 'Other']
+                            .map(
+                              (m) => DropdownMenuItem(value: m, child: Text(m)),
+                            )
+                            .toList(),
+                    onChanged: (val) => setDialogState(() => method = val!),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: notesController,
+                    decoration: const InputDecoration(
+                      labelText: 'Notes',
+                      border: OutlineInputBorder(),
+                    ),
+                    maxLines: 2,
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () async {
+                  final amount = double.tryParse(amountController.text);
+                  if (amount == null || amount <= 0) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Please enter a valid amount'),
+                      ),
+                    );
+                    return;
+                  }
+
+                  Navigator.pop(dialogContext); // Close dialog
+
+                  debugPrint('--- Payment Submission Started ---');
+                  debugPrint('Customer: $customerId');
+                  debugPrint('Amount: $amount');
+                  debugPrint('Method: $method');
+                  debugPrint('Linked Order: $selectedOrderId');
+
+                  try {
+                    await _apiService.addCustomerPayment(
+                      customerId,
+                      amount,
+                      method,
+                      notesController.text,
+                      orderId: selectedOrderId,
+                    );
+
+                    debugPrint('Payment Success!');
+
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Payment recorded successfully!'),
+                        backgroundColor: Colors.green,
+                      ),
+                    );
+
+                    // Refresh Data
+                    debugPrint('Refreshing customer data...');
+                    _loadCustomers();
+                    final data = await _apiService.getCustomers();
+                    setState(() {
+                      _customers = data;
+                      final updated = _customers.firstWhere(
+                        (c) => c['id'] == customerId,
+                        orElse: () => null,
+                      );
+                      if (updated != null) _selectedCustomer = updated;
+                      _loadTransactions(customerId);
+                    });
+                  } catch (e) {
+                    debugPrint('PAYMENT ERROR: $e');
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Error recording payment: $e')),
+                    );
+                  }
+                },
+                child: const Text('Confirm Payment'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
   }
 
   @override
@@ -296,7 +425,7 @@ class _CustomersTabState extends State<CustomersTab> {
                             ),
                             const SizedBox(width: 8),
                             IconButton.filled(
-                              onPressed: () => _showCustomerDialog(),
+                              onPressed: _startCreating,
                               icon: const Icon(Icons.add),
                               tooltip: 'New Customer',
                               style: IconButton.styleFrom(
@@ -369,8 +498,8 @@ class _CustomersTabState extends State<CustomersTab> {
                                         ? []
                                         : [
                                             BoxShadow(
-                                              color: Colors.black.withOpacity(
-                                                0.02,
+                                              color: Colors.black.withValues(
+                                                alpha: 0.02,
                                               ),
                                               blurRadius: 4,
                                               offset: const Offset(0, 2),
@@ -461,12 +590,13 @@ class _CustomersTabState extends State<CustomersTab> {
                                           ),
                                         ],
                                         onSelected: (value) {
-                                          if (value == 'edit')
-                                            _showCustomerDialog(
-                                              customer: customer,
-                                            );
-                                          if (value == 'delete')
+                                          if (value == 'edit') {
+                                            _onSelectCustomer(customer);
+                                            _startEditing();
+                                          }
+                                          if (value == 'delete') {
                                             _deleteCustomer(customer['id']);
+                                          }
                                         },
                                       ),
                                     ],
@@ -488,7 +618,16 @@ class _CustomersTabState extends State<CustomersTab> {
             flex: 5,
             child: Container(
               color: Colors.grey[50],
-              child: _selectedCustomer == null
+              child: _isEditing
+                  ? CustomerFormPanel(
+                      key: ValueKey(
+                        _selectedCustomer?['id'] ?? 'new',
+                      ), // Force rebuild on switch
+                      customer: _selectedCustomer,
+                      onSave: _handleFormSave,
+                      onCancel: _cancelForm,
+                    )
+                  : _selectedCustomer == null
                   ? Center(
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
@@ -503,262 +642,466 @@ class _CustomersTabState extends State<CustomersTab> {
                             'Select a customer to view details',
                             style: TextStyle(color: Colors.grey, fontSize: 16),
                           ),
+                          const SizedBox(height: 16),
+                          ElevatedButton.icon(
+                            onPressed: _startCreating,
+                            icon: const Icon(Icons.add),
+                            label: const Text('Or Create New Customer'),
+                          ),
                         ],
                       ),
                     )
-                  : Column(
+                  : Stack(
+                      fit: StackFit.expand,
                       children: [
-                        // Header Box
-                        Container(
-                          padding: const EdgeInsets.all(24.0),
-                          decoration: const BoxDecoration(
-                            color: Colors.white,
-                            border: Border(
-                              bottom: BorderSide(color: Colors.black12),
-                            ),
-                          ),
-                          child: Row(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  color: Colors.teal[50],
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: const Icon(
-                                  Icons.person,
-                                  color: Colors.teal,
-                                  size: 32,
+                        Column(
+                          children: [
+                            // Header Box
+                            Container(
+                              padding: const EdgeInsets.all(24.0),
+                              decoration: const BoxDecoration(
+                                color: Colors.white,
+                                border: Border(
+                                  bottom: BorderSide(color: Colors.black12),
                                 ),
                               ),
-                              const SizedBox(width: 16),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      _selectedCustomer!['name'],
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .headlineSmall
-                                          ?.copyWith(
-                                            fontWeight: FontWeight.bold,
-                                          ),
+                              child: Row(
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      color: Colors.teal[50],
+                                      borderRadius: BorderRadius.circular(12),
                                     ),
-                                    const SizedBox(height: 4),
-                                    Row(
-                                      children: [
-                                        Icon(
-                                          Icons.phone_android,
-                                          size: 16,
-                                          color: Colors.grey[600],
-                                        ),
-                                        const SizedBox(width: 4),
-                                        Text(
-                                          '${_selectedCustomer!['phone'] ?? 'N/A'}${_selectedCustomer!['alt_phone'] != null && _selectedCustomer!['alt_phone'].isNotEmpty ? ' / ${_selectedCustomer!['alt_phone']}' : ''}',
-                                          style: TextStyle(
-                                            color: Colors.grey[600],
-                                          ),
-                                        ),
-                                        const SizedBox(width: 16),
-                                        Icon(
-                                          Icons.location_on_outlined,
-                                          size: 16,
-                                          color: Colors.grey[600],
-                                        ),
-                                        const SizedBox(width: 4),
-                                        Text(
-                                          _selectedCustomer!['address'] ??
-                                              'No Address',
-                                          style: TextStyle(
-                                            color: Colors.grey[600],
-                                          ),
-                                        ),
-                                      ],
+                                    child: const Icon(
+                                      Icons.person,
+                                      color: Colors.teal,
+                                      size: 32,
                                     ),
-                                  ],
-                                ),
-                              ),
-                              // Financial Stats Card
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 16,
-                                  vertical: 8,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: Colors.red[50],
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(color: Colors.red[100]!),
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.end,
-                                  children: [
-                                    Text(
-                                      'Current Debt',
-                                      style: TextStyle(
-                                        color: Colors.red[900],
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                    Text(
-                                      'KES ${_selectedCustomer!['current_debt'] ?? 0}',
-                                      style: TextStyle(
-                                        color: Colors.red[700],
-                                        fontSize: 18,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-
-                        // Transaction List
-                        Expanded(
-                          child: _isLoadingTransactions
-                              ? const Center(child: CircularProgressIndicator())
-                              : _transactions.isEmpty
-                              ? Center(
-                                  child: Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Icon(
-                                        Icons.shopping_bag_outlined,
-                                        size: 48,
-                                        color: Colors.grey[300],
-                                      ),
-                                      const SizedBox(height: 16),
-                                      const Text(
-                                        'No sales orders found',
-                                        style: TextStyle(color: Colors.grey),
-                                      ),
-                                    ],
                                   ),
-                                )
-                              : ListView.builder(
-                                  padding: const EdgeInsets.all(16),
-                                  itemCount: _transactions.length,
-                                  itemBuilder: (context, index) {
-                                    final order = _transactions[index];
-                                    final date =
-                                        DateFormat(
-                                          'MMM dd, yyyy h:mm a',
-                                        ).format(
-                                          DateTime.parse(order['created_at']),
-                                        );
-                                    final amount =
-                                        double.tryParse(
-                                          order['total_amount'].toString(),
-                                        ) ??
-                                        0;
-
-                                    return Card(
-                                      elevation: 0,
-                                      shape: RoundedRectangleBorder(
-                                        side: BorderSide(
-                                          color: Colors.grey[200]!,
-                                        ),
-                                        borderRadius: BorderRadius.circular(12),
-                                      ),
-                                      margin: const EdgeInsets.only(bottom: 12),
-                                      child: ListTile(
-                                        contentPadding:
-                                            const EdgeInsets.symmetric(
-                                              horizontal: 20,
-                                              vertical: 8,
-                                            ),
-                                        leading: Container(
-                                          padding: const EdgeInsets.all(10),
-                                          decoration: BoxDecoration(
-                                            color:
-                                                order['status'] == 'completed'
-                                                ? Colors.green[50]
-                                                : Colors.orange[50],
-                                            borderRadius: BorderRadius.circular(
-                                              8,
-                                            ),
-                                          ),
-                                          child: Icon(
-                                            Icons.receipt_outlined,
-                                            color:
-                                                order['status'] == 'completed'
-                                                ? Colors.green
-                                                : Colors.orange,
-                                          ),
-                                        ),
-                                        title: Text(
-                                          'Order #${order['id']}',
-                                          style: const TextStyle(
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                        ),
-                                        subtitle: Padding(
-                                          padding: const EdgeInsets.only(
-                                            top: 6.0,
-                                          ),
-                                          child: Row(
-                                            children: [
-                                              Container(
-                                                padding:
-                                                    const EdgeInsets.symmetric(
-                                                      horizontal: 8,
-                                                      vertical: 2,
-                                                    ),
-                                                decoration: BoxDecoration(
-                                                  color: Colors.grey[100],
-                                                  borderRadius:
-                                                      BorderRadius.circular(4),
-                                                ),
-                                                child: Text(
-                                                  order['status'].toUpperCase(),
-                                                  style: const TextStyle(
-                                                    fontSize: 11,
-                                                    fontWeight: FontWeight.bold,
-                                                    color: Colors.black54,
-                                                  ),
-                                                ),
-                                              ),
-                                              const SizedBox(width: 12),
-                                              Text(
-                                                date,
-                                                style: TextStyle(
-                                                  color: Colors.grey[500],
-                                                  fontSize: 13,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                        trailing: Column(
-                                          mainAxisAlignment:
-                                              MainAxisAlignment.center,
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.end,
-                                          children: [
-                                            Text(
-                                              'KES ${format.format(amount)}',
-                                              style: const TextStyle(
+                                  const SizedBox(width: 16),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          _selectedCustomer!['name'],
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .headlineSmall
+                                              ?.copyWith(
                                                 fontWeight: FontWeight.bold,
-                                                fontSize: 16,
                                               ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Row(
+                                          children: [
+                                            Icon(
+                                              Icons.phone_android,
+                                              size: 16,
+                                              color: Colors.grey[600],
                                             ),
-                                            const SizedBox(height: 4),
+                                            const SizedBox(width: 4),
                                             Text(
-                                              '${order['item_count']} Items',
+                                              '${_selectedCustomer!['phone'] ?? 'N/A'}${_selectedCustomer!['alt_phone'] != null && _selectedCustomer!['alt_phone'].isNotEmpty ? ' / ${_selectedCustomer!['alt_phone']}' : ''}',
                                               style: TextStyle(
-                                                color: Colors.grey[500],
-                                                fontSize: 12,
+                                                color: Colors.grey[600],
                                               ),
                                             ),
                                           ],
                                         ),
+                                        const SizedBox(height: 4),
+                                        Row(
+                                          children: [
+                                            Icon(
+                                              Icons.location_on_outlined,
+                                              size: 16,
+                                              color: Colors.grey[600],
+                                            ),
+                                            const SizedBox(width: 4),
+                                            Expanded(
+                                              child: Text(
+                                                _selectedCustomer!['address'] ??
+                                                    'No Address',
+                                                style: TextStyle(
+                                                  color: Colors.grey[600],
+                                                ),
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  // Action Buttons
+                                  Row(
+                                    children: [
+                                      IconButton(
+                                        onPressed: () async {
+                                          final showDetails = await showDialog<bool>(
+                                            context: context,
+                                            builder: (context) => SimpleDialog(
+                                              title: const Text(
+                                                'Select Statement Type',
+                                              ),
+                                              children: [
+                                                SimpleDialogOption(
+                                                  onPressed: () =>
+                                                      Navigator.pop(
+                                                        context,
+                                                        false,
+                                                      ),
+                                                  child: const Padding(
+                                                    padding:
+                                                        EdgeInsets.symmetric(
+                                                          vertical: 8,
+                                                        ),
+                                                    child: Text(
+                                                      'Summary (Total Only)',
+                                                    ),
+                                                  ),
+                                                ),
+                                                SimpleDialogOption(
+                                                  onPressed: () =>
+                                                      Navigator.pop(
+                                                        context,
+                                                        true,
+                                                      ),
+                                                  child: const Padding(
+                                                    padding:
+                                                        EdgeInsets.symmetric(
+                                                          vertical: 8,
+                                                        ),
+                                                    child: Text(
+                                                      'Detailed (With Line Items)',
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          );
+
+                                          if (showDetails == null) return;
+
+                                          await StatementPdfService.printStatement(
+                                            party: _selectedCustomer!,
+                                            transactions: _transactions,
+                                            type: 'Customer',
+                                            showDetails: showDetails,
+                                          );
+                                        },
+                                        icon: const Icon(Icons.print),
+                                        tooltip: 'Print Statement',
                                       ),
-                                    );
-                                  },
-                                ),
+                                      IconButton(
+                                        onPressed: () async {
+                                          final phone =
+                                              _selectedCustomer!['phone']
+                                                  ?.toString()
+                                                  .replaceAll(
+                                                    RegExp(r'[^0-9]'),
+                                                    '',
+                                                  ) ??
+                                              '';
+                                          if (phone.isEmpty) {
+                                            ScaffoldMessenger.of(
+                                              context,
+                                            ).showSnackBar(
+                                              const SnackBar(
+                                                content: Text(
+                                                  'No phone number available',
+                                                ),
+                                              ),
+                                            );
+                                            return;
+                                          }
+                                          final debt =
+                                              double.tryParse(
+                                                _selectedCustomer!['current_debt']
+                                                        ?.toString() ??
+                                                    '0',
+                                              ) ??
+                                              0;
+                                          final message = Uri.encodeComponent(
+                                            'Hello ${_selectedCustomer!['name']}, your current outstanding balance is KES ${format.format(debt)}. Please review your statement.',
+                                          );
+                                          final url = Uri.parse(
+                                            'https://wa.me/$phone?text=$message',
+                                          );
+
+                                          try {
+                                            await launchUrl(
+                                              url,
+                                              mode: LaunchMode
+                                                  .externalApplication,
+                                            );
+                                          } catch (e) {
+                                            if (context.mounted) {
+                                              ScaffoldMessenger.of(
+                                                context,
+                                              ).showSnackBar(
+                                                SnackBar(
+                                                  content: Text(
+                                                    'Could not launch WhatsApp: $e',
+                                                  ),
+                                                ),
+                                              );
+                                            }
+                                          }
+                                        },
+                                        icon: const Icon(Icons.share),
+                                        tooltip: 'Share on WhatsApp',
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(width: 16),
+                                  // Financial Stats Card
+                                  Container(
+                                    constraints: const BoxConstraints(
+                                      minWidth: 100,
+                                    ),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                      vertical: 8,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: Colors.red[50],
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(
+                                        color: Colors.red[100]!,
+                                      ),
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.end,
+                                      children: [
+                                        Text(
+                                          'Current Debt',
+                                          style: TextStyle(
+                                            color: Colors.red[900],
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                        FittedBox(
+                                          child: Text(
+                                            'KES ${format.format(double.tryParse(_selectedCustomer!['current_debt'].toString()) ?? 0.0)}',
+                                            style: TextStyle(
+                                              color: Colors.red[700],
+                                              fontSize: 16,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+
+                            // Transaction List
+                            Expanded(
+                              child: _isLoadingTransactions
+                                  ? const Center(
+                                      child: CircularProgressIndicator(),
+                                    )
+                                  : _transactions.isEmpty
+                                  ? Center(
+                                      child: Column(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.center,
+                                        children: [
+                                          Icon(
+                                            Icons.history_edu,
+                                            size: 48,
+                                            color: Colors.grey[300],
+                                          ),
+                                          const SizedBox(height: 16),
+                                          const Text(
+                                            'No transaction history',
+                                            style: TextStyle(
+                                              color: Colors.grey,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    )
+                                  : ListView.builder(
+                                      padding: const EdgeInsets.all(16),
+                                      itemCount: _transactions.length,
+                                      itemBuilder: (context, index) {
+                                        final item = _transactions[index];
+                                        final isPayment =
+                                            item['type'] == 'payment';
+                                        final amount =
+                                            double.tryParse(
+                                              item['amount'].toString(),
+                                            ) ??
+                                            0;
+                                        final date = DateFormat(
+                                          'MMM dd, yyyy HH:mm',
+                                        ).format(DateTime.parse(item['date']));
+
+                                        return Card(
+                                          elevation: 0,
+                                          color: isPayment
+                                              ? Colors.green[50]
+                                              : Colors.white,
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(
+                                              12,
+                                            ),
+                                            side: BorderSide(
+                                              color: isPayment
+                                                  ? Colors.green[100]!
+                                                  : Colors.grey[200]!,
+                                            ),
+                                          ),
+                                          margin: const EdgeInsets.only(
+                                            bottom: 12,
+                                          ),
+                                          child: ListTile(
+                                            onTap: () {
+                                              if (!isPayment) {
+                                                showDialog(
+                                                  context: context,
+                                                  builder: (context) =>
+                                                      TransactionDetailsDialog(
+                                                        transactionId:
+                                                            item['id'],
+                                                        type: 'order',
+                                                        title: 'Sales Invoice',
+                                                      ),
+                                                );
+                                              }
+                                            },
+                                            leading: Container(
+                                              padding: const EdgeInsets.all(10),
+                                              decoration: BoxDecoration(
+                                                color: isPayment
+                                                    ? Colors.green[50]
+                                                    : Colors.blue[50],
+                                                borderRadius:
+                                                    BorderRadius.circular(8),
+                                              ),
+                                              child: Icon(
+                                                isPayment
+                                                    ? Icons
+                                                          .monetization_on_outlined
+                                                    : Icons
+                                                          .shopping_bag_outlined,
+                                                color: isPayment
+                                                    ? Colors.green
+                                                    : Colors.blue,
+                                              ),
+                                            ),
+                                            title: Text(
+                                              isPayment
+                                                  ? 'Payment Received${item['method'] != null ? ' (${item['method']})' : ''}'
+                                                  : 'Order #${item['id']}',
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                            subtitle: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                const SizedBox(height: 4),
+                                                Text(
+                                                  date,
+                                                  style: TextStyle(
+                                                    color: Colors.grey[500],
+                                                    fontSize: 13,
+                                                  ),
+                                                ),
+                                                if (isPayment &&
+                                                    item['notes'] != null)
+                                                  Text(
+                                                    item['notes'],
+                                                    style: TextStyle(
+                                                      color: Colors.grey[600],
+                                                      fontSize: 12,
+                                                    ),
+                                                  ),
+                                              ],
+                                            ),
+                                            trailing: Column(
+                                              mainAxisAlignment:
+                                                  MainAxisAlignment.center,
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.end,
+                                              children: [
+                                                Text(
+                                                  '${isPayment ? '-' : '+'} KES ${format.format(amount)}',
+                                                  style: TextStyle(
+                                                    fontWeight: FontWeight.bold,
+                                                    fontSize: 16,
+                                                    color: isPayment
+                                                        ? Colors.green[700]
+                                                        : Colors.black87,
+                                                  ),
+                                                ),
+                                                if (!isPayment)
+                                                  Container(
+                                                    margin:
+                                                        const EdgeInsets.only(
+                                                          top: 4,
+                                                        ),
+                                                    padding:
+                                                        const EdgeInsets.symmetric(
+                                                          horizontal: 6,
+                                                          vertical: 2,
+                                                        ),
+                                                    decoration: BoxDecoration(
+                                                      color:
+                                                          item['status'] ==
+                                                              'completed'
+                                                          ? Colors.green[100]
+                                                          : Colors.orange[100],
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                            4,
+                                                          ),
+                                                    ),
+                                                    child: Text(
+                                                      (item['status'] ?? '')
+                                                          .toUpperCase(),
+                                                      style: TextStyle(
+                                                        fontSize: 10,
+                                                        fontWeight:
+                                                            FontWeight.bold,
+                                                        color:
+                                                            item['status'] ==
+                                                                'completed'
+                                                            ? Colors.green[800]
+                                                            : Colors
+                                                                  .orange[900],
+                                                      ),
+                                                    ),
+                                                  ),
+                                              ],
+                                            ),
+                                          ),
+                                        );
+                                      },
+                                    ),
+                            ),
+                          ],
+                        ),
+                        Positioned(
+                          bottom: 24,
+                          right: 24,
+                          child: FloatingActionButton.extended(
+                            onPressed: _showPaymentDialog,
+                            icon: const Icon(Icons.attach_money),
+                            label: const Text('Receive Payment'),
+                            backgroundColor: Colors.green,
+                            foregroundColor: Colors.white,
+                          ),
                         ),
                       ],
                     ),

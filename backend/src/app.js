@@ -26,9 +26,9 @@ app.use(express.json());
 const authRoutes = require('./modules/core/auth.routes');
 const productRoutes = require('./modules/inventory/product.routes');
 const inventoryRoutes = require('./modules/inventory/inventory.routes');
-const supplierRoutes = require('./modules/procurement/supplier.routes');
+// const supplierRoutes = require('./modules/procurement/supplier.routes');
 const salesRoutes = require('./modules/sales/sales.routes');
-const customerRoutes = require('./modules/sales/customer.routes');
+// const customerRoutes = require('./modules/sales/customer.routes');
 const analyticsRoutes = require('./modules/analytics/analytics.routes');
 const branchRoutes = require('./modules/core/branch.routes');
 const cashRoutes = require('./modules/finance/cash.routes');
@@ -36,6 +36,7 @@ const categoryRoutes = require('./modules/inventory/category.routes');
 const locationsRoutes = require('./modules/locations/locations.routes');
 const reportsRoutes = require('./modules/reports/reports.routes');
 const partnerRoutes = require('./modules/partners/partners.routes');
+const settingsRoutes = require('./modules/core/settings.routes');
 
 const { authenticateToken } = require('./middleware/auth.middleware');
 
@@ -52,9 +53,9 @@ app.use('/api/auth', authRoutes); // Login/Register
 app.use('/api/upload', authenticateToken, uploadRoutes);
 app.use('/api/products', authenticateToken, productRoutes);
 app.use('/api/inventory', authenticateToken, inventoryRoutes);
-app.use('/api/suppliers', authenticateToken, supplierRoutes);
+// app.use('/api/suppliers', authenticateToken, supplierRoutes); // Moved to partners
 app.use('/api/sales', authenticateToken, salesRoutes);
-app.use('/api/customers', authenticateToken, customerRoutes);
+// app.use('/api/customers', authenticateToken, customerRoutes); // Moved to partners
 app.use('/api/analytics', authenticateToken, analyticsRoutes);
 app.use('/api/branches', authenticateToken, branchRoutes);
 app.use('/api/cash', authenticateToken, cashRoutes);
@@ -62,6 +63,7 @@ app.use('/api/categories', authenticateToken, categoryRoutes);
 app.use('/api/locations', authenticateToken, locationsRoutes); // New Locations Route
 app.use('/api/reports', authenticateToken, reportsRoutes); // Analytics Reports
 app.use('/api/partners', authenticateToken, partnerRoutes); // Partners (Suppliers & Customers)
+app.use('/api/settings', authenticateToken, settingsRoutes); // Company Settings
 
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);

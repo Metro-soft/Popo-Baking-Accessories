@@ -17,5 +17,17 @@ router.post('/customers', partnersController.createCustomer);
 router.put('/customers/:id', partnersController.updateCustomer);
 router.delete('/customers/:id', partnersController.deleteCustomer);
 router.get('/customers/:id/transactions', partnersController.getCustomerTransactions);
+router.get('/customers/:id/statement', partnersController.getCustomerStatement);
+router.post('/customers/:id/payments', partnersController.addCustomerPayment);
+router.get('/customers/:id/unpaid-orders', partnersController.getCustomerUnpaidOrders);
+
+// Supplier Payments & Details
+router.post('/suppliers/:id/payments', partnersController.addSupplierPayment);
+router.get('/suppliers/:id/statement', partnersController.getSupplierStatement);
+router.get('/suppliers/orders/:id', partnersController.getPurchaseOrderDetails);
+
+// Payments Layout
+router.get('/payments', partnersController.getAllPayments);
+router.get('/payments-out', partnersController.getPaymentsOut);
 
 module.exports = router;
