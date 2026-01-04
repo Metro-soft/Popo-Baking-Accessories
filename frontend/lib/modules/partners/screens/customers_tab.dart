@@ -4,7 +4,14 @@ import '../../core/services/api_service.dart';
 import '../widgets/customer_form_panel.dart';
 import '../widgets/transaction_details_dialog.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'dart:io';
+import 'dart:ui' as ui;
+import 'package:path_provider/path_provider.dart';
+import 'package:screenshot/screenshot.dart';
+import 'package:share_plus/share_plus.dart';
 import '../../core/services/statement_pdf_service.dart';
+import '../../core/services/settings_service.dart';
+import '../widgets/reminder_card.dart';
 
 class CustomersTab extends StatefulWidget {
   const CustomersTab({super.key});
@@ -15,6 +22,9 @@ class CustomersTab extends StatefulWidget {
 
 class _CustomersTabState extends State<CustomersTab> {
   final ApiService _apiService = ApiService();
+  final SettingsService _settingsService = SettingsService(); // New
+  final ScreenshotController _screenshotController =
+      ScreenshotController(); // New
   bool _isLoading = false;
   List<dynamic> _customers = [];
 
@@ -477,6 +487,12 @@ class _CustomersTabState extends State<CustomersTab> {
                                     customer['current_debt'].toString(),
                                   ) ??
                                   0;
+                              final wallet =
+                                  double.tryParse(
+                                    customer['wallet_balance'].toString(),
+                                  ) ??
+                                  0;
+                              final netBalance = wallet - debt;
 
                               return InkWell(
                                 onTap: () => _onSelectCustomer(customer),
@@ -539,9 +555,11 @@ class _CustomersTabState extends State<CustomersTab> {
                                             Row(
                                               children: [
                                                 Text(
-                                                  'Debt: KES ${format.format(debt)}',
+                                                  netBalance < 0
+                                                      ? 'Debt: KES ${format.format(netBalance.abs())}'
+                                                      : 'Wallet: KES ${format.format(netBalance)}',
                                                   style: TextStyle(
-                                                    color: debt > 0
+                                                    color: netBalance < 0
                                                         ? Colors.red
                                                         : Colors.green[700],
                                                     fontWeight: FontWeight.bold,
@@ -817,26 +835,130 @@ class _CustomersTabState extends State<CustomersTab> {
                                             );
                                             return;
                                           }
-                                          final debt =
-                                              double.tryParse(
-                                                _selectedCustomer!['current_debt']
-                                                        ?.toString() ??
-                                                    '0',
-                                              ) ??
-                                              0;
-                                          final message = Uri.encodeComponent(
-                                            'Hello ${_selectedCustomer!['name']}, your current outstanding balance is KES ${format.format(debt)}. Please review your statement.',
-                                          );
-                                          final url = Uri.parse(
-                                            'https://wa.me/$phone?text=$message',
+
+                                          // 1. Ask User: Statement (Text) or Reminder (Image)
+                                          final choice = await showDialog<String>(
+                                            context: context,
+                                            builder: (ctx) => SimpleDialog(
+                                              title: const Text(
+                                                'Share Options',
+                                              ),
+                                              children: [
+                                                SimpleDialogOption(
+                                                  onPressed: () =>
+                                                      Navigator.pop(
+                                                        ctx,
+                                                        'statement',
+                                                      ),
+                                                  child: const Padding(
+                                                    padding:
+                                                        EdgeInsets.symmetric(
+                                                          vertical: 12,
+                                                        ),
+                                                    child: Row(
+                                                      children: [
+                                                        Icon(
+                                                          Icons.message,
+                                                          color: Colors.blue,
+                                                        ),
+                                                        SizedBox(width: 12),
+                                                        Column(
+                                                          crossAxisAlignment:
+                                                              CrossAxisAlignment
+                                                                  .start,
+                                                          children: [
+                                                            Text(
+                                                              'Share Statement Message',
+                                                              style: TextStyle(
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .bold,
+                                                              ),
+                                                            ),
+                                                            Text(
+                                                              'Send text via WhatsApp',
+                                                              style: TextStyle(
+                                                                fontSize: 12,
+                                                                color:
+                                                                    Colors.grey,
+                                                              ),
+                                                            ),
+                                                          ],
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                ),
+                                                const Divider(),
+                                                SimpleDialogOption(
+                                                  onPressed: () =>
+                                                      Navigator.pop(
+                                                        ctx,
+                                                        'reminder',
+                                                      ),
+                                                  child: const Padding(
+                                                    padding:
+                                                        EdgeInsets.symmetric(
+                                                          vertical: 12,
+                                                        ),
+                                                    child: Row(
+                                                      children: [
+                                                        Icon(
+                                                          Icons.image,
+                                                          color: Colors.purple,
+                                                        ),
+                                                        SizedBox(width: 12),
+                                                        Column(
+                                                          crossAxisAlignment:
+                                                              CrossAxisAlignment
+                                                                  .start,
+                                                          children: [
+                                                            Text(
+                                                              'Share Visual Reminder',
+                                                              style: TextStyle(
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .bold,
+                                                              ),
+                                                            ),
+                                                            Text(
+                                                              'Generate & share image',
+                                                              style: TextStyle(
+                                                                fontSize: 12,
+                                                                color:
+                                                                    Colors.grey,
+                                                              ),
+                                                            ),
+                                                          ],
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
                                           );
 
+                                          if (choice == null) return;
+
+                                          // 2. Fetch Settings for Templates
+                                          // Show loading indicator
+                                          if (!context.mounted) return;
+                                          ScaffoldMessenger.of(
+                                            context,
+                                          ).showSnackBar(
+                                            const SnackBar(
+                                              content: Text(
+                                                'Preparing content...',
+                                              ),
+                                              duration: Duration(seconds: 1),
+                                            ),
+                                          );
+
+                                          Map<String, String> settings = {};
                                           try {
-                                            await launchUrl(
-                                              url,
-                                              mode: LaunchMode
-                                                  .externalApplication,
-                                            );
+                                            settings = await _settingsService
+                                                .fetchSettings();
                                           } catch (e) {
                                             if (context.mounted) {
                                               ScaffoldMessenger.of(
@@ -844,59 +966,230 @@ class _CustomersTabState extends State<CustomersTab> {
                                               ).showSnackBar(
                                                 SnackBar(
                                                   content: Text(
-                                                    'Could not launch WhatsApp: $e',
+                                                    'Warning: Using default templates. Error: $e',
                                                   ),
                                                 ),
                                               );
                                             }
                                           }
+
+                                          final debt =
+                                              double.tryParse(
+                                                _selectedCustomer!['current_debt']
+                                                        ?.toString() ??
+                                                    '0',
+                                              ) ??
+                                              0;
+                                          final formattedDebt = format.format(
+                                            debt,
+                                          );
+                                          final customerName =
+                                              _selectedCustomer!['name'];
+
+                                          if (choice == 'statement') {
+                                            // STATEMENT (Text)
+                                            String template =
+                                                settings['statement_message_template'] ??
+                                                'Hello {name}, your current outstanding balance is KES {balance}. Please review your statement.';
+
+                                            final message = template
+                                                .replaceAll(
+                                                  '{name}',
+                                                  customerName,
+                                                )
+                                                .replaceAll(
+                                                  '{balance}',
+                                                  formattedDebt,
+                                                );
+
+                                            final url = Uri.parse(
+                                              'https://wa.me/$phone?text=${Uri.encodeComponent(message)}',
+                                            );
+
+                                            try {
+                                              await launchUrl(
+                                                url,
+                                                mode: LaunchMode
+                                                    .externalApplication,
+                                              );
+                                            } catch (e) {
+                                              if (context.mounted) {
+                                                ScaffoldMessenger.of(
+                                                  context,
+                                                ).showSnackBar(
+                                                  SnackBar(
+                                                    content: Text(
+                                                      'Could not launch WhatsApp: $e',
+                                                    ),
+                                                  ),
+                                                );
+                                              }
+                                            }
+                                          } else {
+                                            // REMINDER (Image)
+                                            // Allow dialog to fully close and UI to settle
+                                            await Future.delayed(
+                                              const Duration(milliseconds: 500),
+                                            );
+
+                                            try {
+                                              if (!context.mounted) return;
+
+                                              // Capture Context for Theme/MediaQuery
+                                              final theme = Theme.of(context);
+                                              final mediaQuery = MediaQuery.of(
+                                                context,
+                                              );
+
+                                              final imageBytes = await _screenshotController
+                                                  .captureFromWidget(
+                                                    Theme(
+                                                      data: theme,
+                                                      child: MediaQuery(
+                                                        data: mediaQuery,
+                                                        child: Directionality(
+                                                          textDirection: ui
+                                                              .TextDirection
+                                                              .ltr,
+                                                          child: Material(
+                                                            child: ReminderCard(
+                                                              customer:
+                                                                  _selectedCustomer!,
+                                                              settings:
+                                                                  settings,
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    ),
+                                                    delay: const Duration(
+                                                      milliseconds: 100,
+                                                    ),
+                                                    context:
+                                                        context, // Use context to inherit/bootstrap
+                                                  );
+
+                                              final directory =
+                                                  await getTemporaryDirectory();
+                                              final imagePath =
+                                                  '${directory.path}/reminder_${DateUtils.dateOnly(DateTime.now()).millisecondsSinceEpoch}.png';
+                                              final imageFile = File(imagePath);
+                                              await imageFile.writeAsBytes(
+                                                imageBytes,
+                                              );
+
+                                              String template =
+                                                  settings['reminder_message_template'] ??
+                                                  'Hello {name}, this is a friendly reminder that you have an outstanding balance of KES {balance}.';
+                                              final caption = template
+                                                  .replaceAll(
+                                                    '{name}',
+                                                    customerName,
+                                                  )
+                                                  .replaceAll(
+                                                    '{balance}',
+                                                    formattedDebt,
+                                                  );
+
+                                              // ignore: deprecated_member_use
+                                              await Share.shareXFiles([
+                                                XFile(imagePath),
+                                              ], text: caption);
+                                            } catch (e) {
+                                              debugPrint(
+                                                'Error sharing reminder: $e',
+                                              );
+                                              if (context.mounted) {
+                                                ScaffoldMessenger.of(
+                                                  context,
+                                                ).showSnackBar(
+                                                  SnackBar(
+                                                    content: Text(
+                                                      'Error sharing reminder: $e',
+                                                    ),
+                                                  ),
+                                                );
+                                              }
+                                            }
+                                          }
                                         },
                                         icon: const Icon(Icons.share),
-                                        tooltip: 'Share on WhatsApp',
+                                        tooltip: 'Share',
                                       ),
                                     ],
                                   ),
                                   const SizedBox(width: 16),
                                   // Financial Stats Card
-                                  Container(
-                                    constraints: const BoxConstraints(
-                                      minWidth: 100,
-                                    ),
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 12,
-                                      vertical: 8,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: Colors.red[50],
-                                      borderRadius: BorderRadius.circular(8),
-                                      border: Border.all(
-                                        color: Colors.red[100]!,
-                                      ),
-                                    ),
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.end,
-                                      children: [
-                                        Text(
-                                          'Current Debt',
-                                          style: TextStyle(
-                                            color: Colors.red[900],
-                                            fontSize: 11,
-                                            fontWeight: FontWeight.bold,
+                                  Builder(
+                                    builder: (context) {
+                                      final debt =
+                                          double.tryParse(
+                                            _selectedCustomer!['current_debt']
+                                                .toString(),
+                                          ) ??
+                                          0;
+                                      final wallet =
+                                          double.tryParse(
+                                            _selectedCustomer!['wallet_balance']
+                                                .toString(),
+                                          ) ??
+                                          0;
+                                      final netBalance = wallet - debt;
+                                      final isPositive = netBalance >= 0;
+
+                                      return Container(
+                                        constraints: const BoxConstraints(
+                                          minWidth: 100,
+                                        ),
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 12,
+                                          vertical: 8,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: isPositive
+                                              ? Colors.green[50]
+                                              : Colors.red[50],
+                                          borderRadius: BorderRadius.circular(
+                                            8,
+                                          ),
+                                          border: Border.all(
+                                            color: isPositive
+                                                ? Colors.green[100]!
+                                                : Colors.red[100]!,
                                           ),
                                         ),
-                                        FittedBox(
-                                          child: Text(
-                                            'KES ${format.format(double.tryParse(_selectedCustomer!['current_debt'].toString()) ?? 0.0)}',
-                                            style: TextStyle(
-                                              color: Colors.red[700],
-                                              fontSize: 16,
-                                              fontWeight: FontWeight.bold,
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.end,
+                                          children: [
+                                            Text(
+                                              isPositive
+                                                  ? 'Wallet Balance'
+                                                  : 'Current Debt',
+                                              style: TextStyle(
+                                                color: isPositive
+                                                    ? Colors.green[900]
+                                                    : Colors.red[900],
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.bold,
+                                              ),
                                             ),
-                                          ),
+                                            FittedBox(
+                                              child: Text(
+                                                'KES ${format.format(isPositive ? netBalance : netBalance.abs())}',
+                                                style: TextStyle(
+                                                  color: isPositive
+                                                      ? Colors.green[700]
+                                                      : Colors.red[700],
+                                                  fontSize: 16,
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                              ),
+                                            ),
+                                          ],
                                         ),
-                                      ],
-                                    ),
+                                      );
+                                    },
                                   ),
                                 ],
                               ),

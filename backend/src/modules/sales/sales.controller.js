@@ -1,7 +1,7 @@
 const db = require('../../config/db');
 
 exports.processTransaction = async (req, res) => {
-    const { customerId, items, payments, discountAmount, discountReason, isHold } = req.body;
+    const { customerId, items, payments, discountAmount, discountReason, isHold, depositChange } = req.body;
     console.log('Processing Transaction - Payload:', JSON.stringify(req.body, null, 2));
     console.log('Extracted CustomerID:', customerId, 'Type:', typeof customerId);
 
@@ -141,7 +141,8 @@ exports.processTransaction = async (req, res) => {
                     }
 
                     if (qtyToDeduct > 0) {
-                        console.warn(`[STOCK] Product ${productId} went negative by ${qtyToDeduct}`);
+                        // [ANTI-THEFT] Strict Stock Check
+                        throw new Error(`Insufficient stock for Product ${productId}. Missing ${qtyToDeduct} items.`);
                     }
 
                     await client.query(
@@ -175,13 +176,32 @@ exports.processTransaction = async (req, res) => {
             }
         }
 
-        // 5. Customer Profile Update (Steps: Debt & Points)
+        // 5. Customer Profile Update (Steps: Debt, Points, & Wallet)
         if (!isHold && customerId) {
             // A. Update Debt if Balance > 0
             if (balance > 0) {
                 await client.query(
                     `UPDATE customers SET current_debt = current_debt + $1 WHERE id = $2`,
                     [balance, customerId]
+                );
+            }
+
+            // [NEW] Wallet Deposit Logic
+            // If user opted to deposit change AND there is change (excess payment)
+            const change = totalPaid - totalPayable;
+            // depositChange is passed from front-end.
+            if (depositChange && change > 0) {
+                console.log(`Depositing Change ${change} to Wallet for Customer ${customerId}`);
+                await client.query(
+                    `UPDATE customers SET wallet_balance = COALESCE(wallet_balance, 0) + $1 WHERE id = $2`,
+                    [change, customerId]
+                );
+
+                // Record this deposit
+                await client.query(
+                    `INSERT INTO customer_payments (customer_id, order_id, amount, method, notes, payment_date) 
+                     VALUES ($1, $2, $3, 'Wallet Deposit', 'Change from Order #${orderId}', NOW())`,
+                    [customerId, orderId, change]
                 );
             }
 
@@ -201,10 +221,18 @@ exports.processTransaction = async (req, res) => {
         // 6. Process Payments
         if (!isHold && payments) {
             for (const p of payments) {
+                // Combine Ref + Phone if provided
+                let finalRef = p.referenceCode || null;
+                if (p.phoneNumber && finalRef) {
+                    finalRef = `${finalRef} (${p.phoneNumber})`;
+                } else if (p.phoneNumber) {
+                    finalRef = `Phone: ${p.phoneNumber}`;
+                }
+
                 // A. Record in Order Payments (Link to specific order)
                 await client.query(
                     `INSERT INTO payments (order_id, method, amount, reference_code) VALUES ($1, $2, $3, $4)`,
-                    [orderId, p.method, p.amount, p.referenceCode || null]
+                    [orderId, p.method, p.amount, finalRef]
                 );
 
                 // B. Record in Customer Ledger (Unified Transaction History)

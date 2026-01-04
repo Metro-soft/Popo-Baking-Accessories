@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../core/services/settings_service.dart';
 
 class CustomerFormPanel extends StatefulWidget {
   final Map<String, dynamic>? customer;
@@ -26,6 +27,9 @@ class _CustomerFormPanelState extends State<CustomerFormPanel> {
   late TextEditingController _limitController;
   late TextEditingController _openingBalanceController;
 
+  final SettingsService _settingsService = SettingsService();
+  String _defaultCountryCode = '254';
+
   final List<String> _pickupPoints = [
     'Ndhiwa - Main Stage',
     'Ndhiwa - Rubis Station',
@@ -41,6 +45,7 @@ class _CustomerFormPanelState extends State<CustomerFormPanel> {
   @override
   void initState() {
     super.initState();
+    _fetchSettings();
     _nameController = TextEditingController(
       text: widget.customer?['name'] ?? '',
     );
@@ -76,12 +81,34 @@ class _CustomerFormPanelState extends State<CustomerFormPanel> {
     super.dispose();
   }
 
+  Future<void> _fetchSettings() async {
+    try {
+      final settings = await _settingsService.fetchSettings();
+      if (mounted) {
+        setState(() {
+          _defaultCountryCode = settings['default_country_code'] ?? '254';
+        });
+      }
+    } catch (e) {
+      debugPrint('Error fetching settings in form: $e');
+    }
+  }
+
   void _submit() {
     if (_formKey.currentState!.validate()) {
+      // Auto-format phone numbers
+      String phone = _phoneController.text.trim();
+      String altPhone = _altPhoneController.text.trim();
+
+      phone = _formatPhoneNumber(phone);
+      if (altPhone.isNotEmpty) {
+        altPhone = _formatPhoneNumber(altPhone);
+      }
+
       final data = {
         'name': _nameController.text.trim(),
-        'phone': _phoneController.text.trim(),
-        'alt_phone': _altPhoneController.text.trim(),
+        'phone': phone,
+        'alt_phone': altPhone,
         'email': _emailController.text.trim(),
         'address': _addressController.text.trim(),
         'credit_limit': double.tryParse(_limitController.text.trim()) ?? 0.0,
@@ -90,6 +117,26 @@ class _CustomerFormPanelState extends State<CustomerFormPanel> {
       };
       widget.onSave(data);
     }
+  }
+
+  String _formatPhoneNumber(String phone) {
+    // Remove non-digit characters
+    String cleaned = phone.replaceAll(RegExp(r'[^0-9]'), '');
+
+    if (cleaned.startsWith('0')) {
+      // Replace leading 0 with country code
+      return _defaultCountryCode + cleaned.substring(1);
+    } else if (!cleaned.startsWith(_defaultCountryCode)) {
+      // If it doesn't start with 0 and doesn't start with country code, prepend it
+      // Validating length might be risky if they have short numbers, but typically 9 digits for mobile without 0
+      // Let's safe-guard: if length is 9 (common for NSN), prepend.
+      if (cleaned.length == 9) {
+        return _defaultCountryCode + cleaned;
+      }
+      // If user entered just 123456789 (9 digits), we prepend.
+      // If they entered 254... (12 digits), we leave it.
+    }
+    return cleaned;
   }
 
   @override

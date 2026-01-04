@@ -4,6 +4,8 @@ import 'modules/core/screens/login_screen.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'modules/core/screens/main_layout.dart';
 import 'modules/core/services/api_service.dart';
+import 'package:provider/provider.dart';
+import 'modules/sales/providers/sales_provider.dart';
 
 // Brand Color
 const Color kPrimaryColor = Color(0xFFA01B2D); // Deep Red from Logo
@@ -17,7 +19,12 @@ void main() {
         debugPrint('Caught Framework Error: ${details.exception}');
       };
 
-      runApp(const PopoBakingApp());
+      runApp(
+        MultiProvider(
+          providers: [ChangeNotifierProvider(create: (_) => SalesProvider())],
+          child: const PopoBakingApp(),
+        ),
+      );
     },
     (error, stack) {
       debugPrint('Caught Global Async Error: $error');

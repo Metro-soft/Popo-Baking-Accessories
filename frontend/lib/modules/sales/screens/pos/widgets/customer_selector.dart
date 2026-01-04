@@ -2,9 +2,14 @@ import 'package:flutter/material.dart';
 import '../../../../core/services/api_service.dart';
 
 class CustomerSelector extends StatefulWidget {
+  final Map<String, dynamic>? initialCustomer;
   final Function(Map<String, dynamic>?) onCustomerSelected;
 
-  const CustomerSelector({super.key, required this.onCustomerSelected});
+  const CustomerSelector({
+    super.key,
+    this.initialCustomer,
+    required this.onCustomerSelected,
+  });
 
   @override
   State<CustomerSelector> createState() => _CustomerSelectorState();
@@ -23,6 +28,7 @@ class _CustomerSelectorState extends State<CustomerSelector> {
   @override
   void initState() {
     super.initState();
+    _selectedCustomer = widget.initialCustomer;
     _loadCustomers();
   }
 

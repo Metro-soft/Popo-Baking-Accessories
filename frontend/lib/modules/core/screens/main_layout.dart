@@ -52,7 +52,9 @@ class _MainLayoutState extends State<MainLayout> {
       case 'sales_invoices':
         return const SalesInvoicesScreen();
       case 'sales_orders':
-        return const POSScreen();
+        return SalesInvoiceScreen(
+          onExit: () => setState(() => _selectedKey = 'dashboard'),
+        );
       case 'payments_in':
         return const PaymentsInScreen();
       case 'estimates':
@@ -113,6 +115,12 @@ class _MainLayoutState extends State<MainLayout> {
     return LayoutBuilder(
       builder: (context, constraints) {
         if (constraints.maxWidth > 900) {
+          final isFocusMode = _selectedKey == 'sales_orders';
+
+          if (isFocusMode) {
+            return Scaffold(body: _getBody());
+          }
+
           // Desktop Layout
           return Scaffold(
             body: Row(

@@ -268,16 +268,28 @@ class ApiService {
     }
   }
 
-  Future<void> processTransaction(Map<String, dynamic> payload) async {
-    final response = await http.post(
-      Uri.parse('$baseUrl/sales/transaction'),
-      headers: _headers,
-      body: jsonEncode(payload),
-    );
-    if (response.statusCode != 200 && response.statusCode != 201) {
-      // Pass the backend error message (e.g., Credit Limit Exceeded)
-      final err = jsonDecode(response.body);
-      throw Exception(err['error'] ?? 'Transaction failed');
+  Future<Map<String, dynamic>> processTransaction(
+    Map<String, dynamic> payload,
+  ) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/sales/transaction'),
+        headers: _headers,
+        body: jsonEncode(payload),
+      );
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      } else {
+        // Business Logic Error (Stock, limit etc)
+        final err = jsonDecode(response.body);
+        return {
+          'success': false,
+          'message': err['error'] ?? 'Transaction failed',
+        };
+      }
+    } catch (e) {
+      return {'success': false, 'message': 'Connection Error: $e'};
     }
   }
 

@@ -20,8 +20,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _phoneController = TextEditingController();
   final _emailController = TextEditingController();
 
-  // No longer needed
-  // final _logoUrlController = TextEditingController();
+  // final _logoUrlController = TextEditingController(); // No longer needed
+
+  // Message Templates
+  final _statementTemplateController = TextEditingController();
+  final _reminderTemplateController = TextEditingController();
+  final _countryCodeController = TextEditingController();
 
   String? _currentLogoUrl;
   XFile? _pickedLogo; // Store picked image
@@ -44,6 +48,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _phoneController.text = settings['company_phone'] ?? '';
       _emailController.text = settings['company_email'] ?? '';
       _currentLogoUrl = settings['company_logo'];
+
+      _statementTemplateController.text =
+          settings['statement_message_template'] ??
+          'Hello {name}, your current outstanding balance is {balance}. Please review your statement.';
+      _reminderTemplateController.text =
+          settings['reminder_message_template'] ??
+          'Hello {name}, this is a friendly reminder that you have an outstanding balance of {balance}.';
+      _countryCodeController.text = settings['default_country_code'] ?? '254';
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -81,6 +93,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         'company_phone': _phoneController.text,
         'company_email': _emailController.text,
         'company_logo': logoUrl,
+        'statement_message_template': _statementTemplateController.text,
+        'reminder_message_template': _reminderTemplateController.text,
+        'default_country_code': _countryCodeController.text,
       };
 
       await _settingsService.updateSettings(
@@ -210,6 +225,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 icon: Icons.location_on,
                 maxLines: 2,
               ),
+              const SizedBox(height: 16),
+              _buildTextField(
+                controller: _countryCodeController,
+                label: 'Default Country Code (e.g. 254)',
+                icon: Icons.flag,
+                hint: '254',
+              ),
 
               const SizedBox(height: 32),
               const Text(
@@ -276,6 +298,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ),
 
+              const SizedBox(height: 32),
+              const Text(
+                'Message Templates',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Use {name} for customer name and {balance} for debt amount.',
+                style: TextStyle(color: Colors.grey, fontSize: 12),
+              ),
+              const SizedBox(height: 16),
+              _buildTextField(
+                controller: _statementTemplateController,
+                label: 'Statement Message (WhatsApp)',
+                icon: Icons.message,
+                maxLines: 3,
+              ),
+              const SizedBox(height: 16),
+              _buildTextField(
+                controller: _reminderTemplateController,
+                label: 'Reminder Message (Image Caption)',
+                icon: Icons.image,
+                maxLines: 3,
+              ),
+
               const SizedBox(height: 40),
               SizedBox(
                 width: double.infinity,
@@ -332,6 +379,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _addressController.dispose();
     _phoneController.dispose();
     _emailController.dispose();
+    _statementTemplateController.dispose();
+    _reminderTemplateController.dispose();
+    _countryCodeController.dispose();
     super.dispose();
   }
 }

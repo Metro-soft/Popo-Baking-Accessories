@@ -57,9 +57,9 @@ class StatementPdfService {
     }).toList();
 
     // Fonts
-    final font = await PdfGoogleFonts.openSansRegular();
-    final fontBold = await PdfGoogleFonts.openSansBold();
-    final fontItalic = await PdfGoogleFonts.openSansItalic();
+    final font = pw.Font.helvetica();
+    final fontBold = pw.Font.helveticaBold();
+    final fontItalic = pw.Font.helveticaOblique();
 
     doc.addPage(
       pw.MultiPage(
@@ -394,8 +394,8 @@ class StatementPdfService {
         ) ??
         0;
 
-    final font = await PdfGoogleFonts.openSansRegular();
-    final fontBold = await PdfGoogleFonts.openSansBold();
+    final font = pw.Font.helvetica();
+    final fontBold = pw.Font.helveticaBold();
 
     doc.addPage(
       pw.MultiPage(
