@@ -76,15 +76,28 @@ class ApiService {
 
     if (response.statusCode >= 400) {
       String message = '$defaultMessage (Status: ${response.statusCode})';
-      try {
-        final body = jsonDecode(response.body);
-        if (body is Map && body.containsKey('error')) {
-          message = body['error'];
-        } else {
-          message = '$message: ${response.body}';
+      final isJson =
+          response.headers['content-type']?.contains('application/json') ??
+          false;
+
+      if (isJson) {
+        try {
+          final body = jsonDecode(response.body);
+          if (body is Map && body.containsKey('error')) {
+            message = body['error'];
+          }
+        } catch (_) {
+          // JSON parsing failed despite header
         }
-      } catch (_) {
-        message = '$message: ${response.body}';
+      } else {
+        // Likely HTML or plain text error
+        // Don't include full HTML in exception message if it's long
+        final body = response.body;
+        if (body.startsWith('<!DOCTYPE') || body.startsWith('<html')) {
+          message = '$message (Server Error)';
+        } else {
+          message = '$message: $body';
+        }
       }
       throw Exception(message);
     }
@@ -174,11 +187,21 @@ class ApiService {
     }
   }
 
-  Future<List<Product>> getProducts({int? branchId}) async {
+  Future<List<Product>> getProducts({int? branchId, String? search}) async {
     String url = '/products';
+    List<String> params = [];
+
     if (branchId != null) {
-      url += '?branchId=$branchId';
+      params.add('branchId=$branchId');
     }
+    if (search != null && search.isNotEmpty) {
+      params.add('search=${Uri.encodeComponent(search)}');
+    }
+
+    if (params.isNotEmpty) {
+      url += '?${params.join('&')}';
+    }
+
     final response = await _get(url);
     _handleError(response, defaultMessage: 'Failed to load products');
     List<dynamic> body = jsonDecode(response.body);
@@ -293,6 +316,29 @@ class ApiService {
     }
   }
 
+  // [NEW] Update Sale (True Edit)
+  Future<Map<String, dynamic>> updateSale(
+    String id,
+    Map<String, dynamic> payload,
+  ) async {
+    try {
+      final response = await http.put(
+        Uri.parse('$baseUrl/sales/transaction/$id'),
+        headers: _headers,
+        body: jsonEncode(payload),
+      );
+
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      } else {
+        final err = jsonDecode(response.body);
+        return {'success': false, 'message': err['error'] ?? 'Update failed'};
+      }
+    } catch (e) {
+      return {'success': false, 'message': 'Connection Error: $e'};
+    }
+  }
+
   Future<Map<String, dynamic>> getDashboardStats({int? branchId}) async {
     String url = '$baseUrl/analytics/stats';
     if (branchId != null) {
@@ -376,6 +422,25 @@ class ApiService {
 
   Future<List<dynamic>> getBranches() async {
     return getLocations();
+  }
+
+  Future<List<dynamic>> getActivityLogs({
+    String? action,
+    String? startDate,
+    String? endDate,
+  }) async {
+    String query = '';
+    final params = <String>[];
+    if (action != null) params.add('action=$action');
+    if (startDate != null) params.add('start_date=$startDate');
+    if (endDate != null) params.add('end_date=$endDate');
+
+    if (params.isNotEmpty) {
+      query = '?${params.join('&')}';
+    }
+
+    final response = await _get('/api/activity$query');
+    return response as List<dynamic>;
   }
 
   // --- Cash Management ---
@@ -469,6 +534,17 @@ class ApiService {
     }
   }
 
+  Future<void> voidSale(int orderId) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/sales/orders/$orderId/void'),
+      headers: _headers,
+    );
+    if (response.statusCode != 200) {
+      final error = jsonDecode(response.body)['error'] ?? 'Failed to void sale';
+      throw Exception(error);
+    }
+  }
+
   Future<Map<String, dynamic>> getTransactionDetails(int id) async {
     final response = await http.get(
       Uri.parse('$baseUrl/sales/orders/$id'),
@@ -544,12 +620,41 @@ class ApiService {
   }
 
   Future<void> deleteProduct(int id) async {
+    // This now performs a Soft Delete (Archive)
     final response = await http.delete(
       Uri.parse('$baseUrl/products/$id'),
       headers: _headers,
     );
     if (response.statusCode != 200) {
-      throw Exception('Failed to delete product: ${response.body}');
+      // Pass the backend error message directly for "You don't have rights"
+      final error =
+          jsonDecode(response.body)['error'] ?? 'Failed to delete product';
+      throw Exception(error);
+    }
+  }
+
+  Future<List<Product>> fetchTrashedProducts() async {
+    final response = await http.get(
+      Uri.parse('$baseUrl/products/trash'),
+      headers: _headers,
+    );
+    if (response.statusCode == 200) {
+      final List<dynamic> data = jsonDecode(response.body);
+      return data.map((json) => Product.fromJson(json)).toList();
+    } else {
+      throw Exception('Failed to fetch trash: ${response.body}');
+    }
+  }
+
+  Future<void> restoreProduct(int id) async {
+    final response = await http.put(
+      Uri.parse('$baseUrl/products/$id/restore'),
+      headers: _headers,
+    );
+    if (response.statusCode != 200) {
+      final error =
+          jsonDecode(response.body)['error'] ?? 'Failed to restore product';
+      throw Exception(error);
     }
   }
 
@@ -579,6 +684,35 @@ class ApiService {
     );
     _handleError(response, defaultMessage: 'Failed to load locations');
     return jsonDecode(response.body);
+  }
+
+  // [NEW] Dispatch Management
+  Future<List<dynamic>> getPendingDispatches() async {
+    final response = await http.get(
+      Uri.parse('$baseUrl/sales/orders/dispatch/list'),
+      headers: _headers,
+    );
+    _handleError(response, defaultMessage: 'Failed to load dispatch orders');
+    return jsonDecode(response.body);
+  }
+
+  Future<void> updateDispatchStatus(
+    int orderId,
+    String status, {
+    Map<String, dynamic>? deliveryDetails,
+  }) async {
+    final response = await http.put(
+      Uri.parse('$baseUrl/sales/orders/$orderId/dispatch'),
+      headers: _headers,
+      body: jsonEncode({'status': status, 'deliveryDetails': deliveryDetails}),
+    );
+
+    if (response.statusCode != 200) {
+      _handleError(
+        response,
+        defaultMessage: 'Failed to update dispatch status',
+      );
+    }
   }
 
   Future<void> createLocation(Map<String, dynamic> data) async {
@@ -648,6 +782,22 @@ class ApiService {
     return jsonDecode(response.body);
   }
 
+  // [NEW] Tax Report
+  Future<List<dynamic>> getTaxReport({
+    int? branchId,
+    String? startDate,
+    String? endDate,
+  }) async {
+    String url = '$baseUrl/reports/tax-report?';
+    if (branchId != null) url += 'branchId=$branchId&';
+    if (startDate != null) url += 'startDate=$startDate&';
+    if (endDate != null) url += 'endDate=$endDate&';
+
+    final response = await http.get(Uri.parse(url), headers: _headers);
+    _handleError(response, defaultMessage: 'Failed to generate tax report');
+    return jsonDecode(response.body);
+  }
+
   // --- Partners (Suppliers & Customers) ---
 
   Future<List<dynamic>> getSuppliers() async {
@@ -698,6 +848,12 @@ class ApiService {
   Future<List<dynamic>> getCustomers() async {
     final response = await _get('/partners/customers');
     _handleError(response, defaultMessage: 'Failed to load customers');
+    return jsonDecode(response.body);
+  }
+
+  Future<Map<String, dynamic>> getCustomer(int id) async {
+    final response = await _get('/partners/customers/$id');
+    _handleError(response, defaultMessage: 'Failed to load customer');
     return jsonDecode(response.body);
   }
 
@@ -752,8 +908,18 @@ class ApiService {
     return jsonDecode(response.body);
   }
 
-  Future<List<dynamic>> getPaymentsIn() async {
-    final response = await _get('/partners/payments');
+  Future<List<dynamic>> getPaymentsIn({
+    String? startDate,
+    String? endDate,
+    int? branchId,
+  }) async {
+    String url = '/partners/payments?';
+    if (startDate != null) url += 'startDate=$startDate&';
+    if (endDate != null) url += 'endDate=$endDate&';
+    if (branchId != null) url += 'branchId=$branchId&';
+
+    debugPrint('API Request: $url');
+    final response = await _get(url);
     _handleError(response, defaultMessage: 'Failed to load payments');
     return jsonDecode(response.body);
   }
@@ -809,5 +975,56 @@ class ApiService {
       return decoded.first;
     }
     return decoded;
+  }
+
+  // --- Estimates / Quotations ---
+
+  Future<Map<String, dynamic>> createEstimate(Map<String, dynamic> data) async {
+    final response = await _post('/estimates', data);
+    if (response.statusCode == 201) {
+      return jsonDecode(response.body);
+    } else {
+      throw Exception('Failed to create estimate: ${response.body}');
+    }
+  }
+
+  Future<List<dynamic>> getEstimates({
+    int? branchId,
+    String? status,
+    String? startDate,
+  }) async {
+    String url = '/estimates?';
+    if (branchId != null) url += 'branchId=$branchId&';
+    if (status != null) url += 'status=$status&';
+    if (startDate != null) url += 'startDate=$startDate&';
+
+    final response = await _get(url);
+    _handleError(response, defaultMessage: 'Failed to load estimates');
+    return jsonDecode(response.body);
+  }
+
+  Future<void> updateEstimate(int id, Map<String, dynamic> data) async {
+    final response = await _put('/estimates/$id', data);
+    _handleError(response, defaultMessage: 'Failed to update estimate');
+  }
+
+  Future<Map<String, dynamic>> getEstimateDetails(int id) async {
+    final response = await _get('/estimates/$id');
+    _handleError(response, defaultMessage: 'Failed to load estimate details');
+    return jsonDecode(response.body);
+  }
+
+  Future<void> deleteEstimate(int id) async {
+    final response = await _delete('/estimates/$id');
+    _handleError(response, defaultMessage: 'Failed to delete estimate');
+  }
+
+  Future<Map<String, dynamic>> convertEstimateToOrder(int id) async {
+    final response = await _post('/estimates/$id/convert', {});
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    } else {
+      throw Exception('Failed to convert estimate: ${response.body}');
+    }
   }
 }

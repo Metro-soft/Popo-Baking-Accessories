@@ -147,7 +147,7 @@ exports.getDashboardStats = async (req, res) => {
 exports.getTopProducts = async (req, res) => {
     try {
         const result = await db.query(`
-            SELECT p.name, p.sku, SUM(oi.quantity) as total_sold
+            SELECT p.name as product_name, p.sku, SUM(oi.quantity) as total_sold
             FROM order_items oi
             JOIN products p ON oi.product_id = p.id
             GROUP BY p.id, p.name, p.sku

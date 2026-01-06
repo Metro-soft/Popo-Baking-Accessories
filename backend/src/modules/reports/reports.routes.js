@@ -8,5 +8,6 @@ router.get('/audit', authenticateToken, requireRole(['admin']), reportsControlle
 router.get('/sales', authenticateToken, requireRole(['admin']), reportsController.getSalesReport);
 router.get('/valuation', authenticateToken, requireRole(['admin']), reportsController.getInventoryValuation);
 router.get('/low-stock', authenticateToken, requireRole(['admin']), reportsController.getLowStockReport);
+router.get('/tax-report', authenticateToken, requireRole(['admin']), reportsController.getTaxReport); // [NEW]
 
 module.exports = router;

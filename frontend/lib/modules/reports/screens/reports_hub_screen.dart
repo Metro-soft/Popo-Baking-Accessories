@@ -32,6 +32,7 @@ class _ReportsHubScreenState extends State<ReportsHubScreen>
   List<dynamic> _salesData = [];
   List<dynamic> _valuationData = [];
   List<dynamic> _lowStockData = [];
+  List<dynamic> _taxData = []; // [NEW]
 
   final List<Map<String, dynamic>> _reportTypes = [
     {
@@ -48,6 +49,11 @@ class _ReportsHubScreenState extends State<ReportsHubScreen>
       'title': 'Low Stock Alerts',
       'icon': Icons.warning_amber_rounded,
       'desc': 'Products below reorder level',
+    },
+    {
+      'title': 'Tax Report', // [NEW]
+      'icon': Icons.account_balance,
+      'desc': 'Tax Liability and Net vs Gross Revenue',
     },
   ];
 
@@ -108,6 +114,14 @@ class _ReportsHubScreenState extends State<ReportsHubScreen>
             branchId: _selectedBranchId,
           );
           if (mounted) setState(() => _lowStockData = data);
+          break;
+        case 3: // Tax Report [NEW]
+          final data = await _apiService.getTaxReport(
+            branchId: _selectedBranchId,
+            startDate: start,
+            endDate: end,
+          );
+          if (mounted) setState(() => _taxData = data);
           break;
       }
     } catch (e) {
@@ -462,6 +476,8 @@ class _ReportsHubScreenState extends State<ReportsHubScreen>
         return _buildValuationTab();
       case 2:
         return _buildLowStockTab();
+      case 3:
+        return _buildTaxTab(); // [NEW]
       default:
         return const Center(child: Text('Select a report'));
     }
@@ -745,6 +761,160 @@ class _ReportsHubScreenState extends State<ReportsHubScreen>
           ),
         ],
       ),
+    );
+  }
+
+  // [NEW] Tax Tab Builder
+  Widget _buildTaxTab() {
+    if (_taxData.isEmpty) {
+      return const Center(child: Text('No tax data found for this period.'));
+    }
+
+    // Aggregates
+    double totalTax = 0;
+    double netRevenue = 0;
+    double grossRevenue = 0;
+
+    for (var i in _taxData) {
+      totalTax += double.tryParse(i['total_tax'].toString()) ?? 0;
+      netRevenue += double.tryParse(i['net_revenue'].toString()) ?? 0;
+      grossRevenue += double.tryParse(i['total_revenue'].toString()) ?? 0;
+    }
+
+    return Column(
+      children: [
+        // KPI Cards
+        Row(
+          children: [
+            Expanded(
+              child: _buildKpiCard(
+                'Tax Collected',
+                NumberFormat.currency(symbol: 'KES ').format(totalTax),
+                Colors.red[700]!,
+                Icons.account_balance,
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: _buildKpiCard(
+                'Net Revenue',
+                NumberFormat.currency(symbol: 'KES ').format(netRevenue),
+                Colors.teal[700]!,
+                Icons.monetization_on,
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: _buildKpiCard(
+                'Gross Sales',
+                NumberFormat.currency(symbol: 'KES ').format(grossRevenue),
+                Colors.blue[700]!,
+                Icons.bar_chart,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 24),
+
+        // Detailed Table
+        Expanded(
+          child: Card(
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              side: BorderSide(color: Colors.grey.shade200),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.vertical,
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: DataTable(
+                  headingRowColor: WidgetStateProperty.all(Colors.grey[50]),
+                  columns: const [
+                    DataColumn(
+                      label: Text(
+                        'Branch',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    DataColumn(
+                      label: Text(
+                        'Transactions',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    DataColumn(
+                      label: Text(
+                        'Gross Sales',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    DataColumn(
+                      label: Text(
+                        'Tax Collected',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    DataColumn(
+                      label: Text(
+                        'Net Sales',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ],
+                  rows: _taxData.map((item) {
+                    return DataRow(
+                      cells: [
+                        DataCell(
+                          Text(
+                            item['branch_name'] ?? 'Unknown',
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                        DataCell(Text(item['total_txns']?.toString() ?? '0')),
+                        DataCell(
+                          Text(
+                            NumberFormat.currency(symbol: 'KES ').format(
+                              double.tryParse(
+                                    item['total_revenue'].toString(),
+                                  ) ??
+                                  0,
+                            ),
+                          ),
+                        ),
+                        DataCell(
+                          Text(
+                            NumberFormat.currency(symbol: 'KES ').format(
+                              double.tryParse(item['total_tax'].toString()) ??
+                                  0,
+                            ),
+                            style: const TextStyle(
+                              color: Colors.red,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        DataCell(
+                          Text(
+                            NumberFormat.currency(symbol: 'KES ').format(
+                              double.tryParse(item['net_revenue'].toString()) ??
+                                  0,
+                            ),
+                            style: const TextStyle(
+                              color: Colors.teal,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
+                    );
+                  }).toList(),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 

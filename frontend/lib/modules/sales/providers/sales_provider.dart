@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../inventory/models/product_model.dart';
+import '../../core/services/settings_service.dart'; // [NEW]
 
 class InvoiceItem {
   String id;
@@ -39,6 +40,7 @@ class InvoiceDraft {
   double discountAmount = 0.0; // Flat amount override or calculated
 
   double taxRate = 0.0; // Percentage (e.g. 16 for 16%)
+  String taxType = 'Exclusive'; // 'Inclusive' or 'Exclusive'
   bool roundOff = false;
 
   // Payment & Debt
@@ -49,13 +51,20 @@ class InvoiceDraft {
   double amountTendered = 0.0;
   bool depositChange = false; // Deposit change to wallet
 
+  // Dispatch Mode
+  bool isDispatch = false;
+
   // Meta
   String notes = '';
+
+  // Editing
+  String? editingOrderId;
 
   InvoiceDraft({
     required this.id,
     this.title = 'New Sale',
     this.customer,
+    this.editingOrderId,
     DateTime? initialDate,
     this.paymentTerms = 'Due on Receipt',
   }) : date = initialDate ?? DateTime.now(),
@@ -64,10 +73,30 @@ class InvoiceDraft {
   double get subtotal => items.fold(0, (sum, item) => sum + item.total);
 
   double get calculateDiscount => (subtotal * discountRate / 100);
-  double get calculateTax => ((subtotal - calculateDiscount) * taxRate / 100);
+
+  double get calculateTax {
+    if (taxType == 'Inclusive') {
+      // Tax is inside the subtotal (after discount assumed?)
+      // Usually Tax is on the final sell price.
+      // Tax = (Total / (1 + Rate)) * Rate
+      double amountAfterDiscount = subtotal - calculateDiscount;
+      return amountAfterDiscount -
+          (amountAfterDiscount / (1 + (taxRate / 100)));
+    }
+    // Exclusive: Tax is on top
+    return (subtotal - calculateDiscount) * taxRate / 100;
+  }
 
   double get grandTotal {
-    double total = subtotal - calculateDiscount + calculateTax;
+    double total;
+    if (taxType == 'Inclusive') {
+      // Total is just subtotal - discount (Tax is already inside)
+      total = subtotal - calculateDiscount;
+    } else {
+      // Total = Base + Tax
+      total = subtotal - calculateDiscount + calculateTax;
+    }
+
     if (roundOff) {
       return total.roundToDouble();
     }
@@ -101,10 +130,37 @@ class InvoiceDraft {
 
 class SalesProvider extends ChangeNotifier {
   final List<InvoiceDraft> _drafts = [];
+  final SettingsService _settingsService = SettingsService(); // [NEW]
   int _activeTabIndex = 0;
 
+  // Global Defaults
+  double _globalTaxRate = 0.0;
+  String _globalTaxType = 'Exclusive';
+
   SalesProvider() {
+    refreshTaxSettings(); // [NEW]
     _addNewDraft(); // Start with one tab
+  }
+
+  Future<void> refreshTaxSettings() async {
+    try {
+      final settings = await _settingsService.fetchSettings();
+      _globalTaxRate = double.tryParse(settings['tax_rate'] ?? '0') ?? 0.0;
+      _globalTaxType = settings['default_tax_type'] ?? 'Exclusive';
+
+      // Update the initial draft if it's empty/untouched?
+      // Or just ensure future drafts usage.
+      // Let's update all current drafts if they are "fresh" (no items)?
+      // For now, just setting globals for future reference is enough,
+      // but to make it feel immediate, we might update the active draft if it has 0 items.
+      if (_drafts.isNotEmpty && _drafts.first.items.isEmpty) {
+        _drafts.first.taxRate = _globalTaxRate;
+        _drafts.first.taxType = _globalTaxType;
+        notifyListeners();
+      }
+    } catch (e) {
+      debugPrint('Error loading sales globals: $e');
+    }
   }
 
   List<InvoiceDraft> get drafts => _drafts;
@@ -113,7 +169,12 @@ class SalesProvider extends ChangeNotifier {
 
   void _addNewDraft() {
     final newId = DateTime.now().millisecondsSinceEpoch.toString();
-    _drafts.add(InvoiceDraft(id: newId, title: 'Sale #${_drafts.length + 1}'));
+    _drafts.add(
+      InvoiceDraft(id: newId, title: 'Sale #${_drafts.length + 1}')
+        ..taxRate =
+            _globalTaxRate // [NEW]
+        ..taxType = _globalTaxType, // [NEW]
+    );
     // Switch to new tab if it's not the first initialization (optional)
     if (_drafts.length > 1) {
       _activeTabIndex = _drafts.length - 1;
@@ -148,7 +209,18 @@ class SalesProvider extends ChangeNotifier {
     // Auto-update title?
     if (customer != null) {
       activeDraft.title = customer['name'];
+      // [NEW] Auto-fill Mpesa Phone
+      if (customer['phone'] != null) {
+        activeDraft.mpesaPhone = customer['phone'].toString();
+      }
     }
+    notifyListeners();
+  }
+
+  // [NEW] Set Editing Mode
+  void setEditingSale(String id) {
+    activeDraft.editingOrderId = id;
+    activeDraft.title = 'Edit Sale #$id';
     notifyListeners();
   }
 
@@ -200,7 +272,7 @@ class SalesProvider extends ChangeNotifier {
   }
 
   void setDiscountAmount(double amount) {
-    if (activeDraft.subtotal == 0) return;
+    if (activeDraft.subtotal <= 0) return;
     activeDraft.discountRate = (amount / activeDraft.subtotal) * 100;
     notifyListeners();
   }
@@ -250,9 +322,35 @@ class SalesProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  // --- Dispatch Actions ---
+
+  void toggleDispatchMode(bool value) {
+    activeDraft.isDispatch = value;
+    notifyListeners();
+  }
+
+  void setTaxType(String type) {
+    activeDraft.taxType = type;
+    notifyListeners();
+  }
+
   void setPaymentTerms(String term) {
     activeDraft.paymentTerms = term;
     activeDraft.updateDueDate();
+    notifyListeners();
+  }
+
+  void resetActiveDraft() {
+    // Replace with a fresh draft but keep ID or generate new?
+    // Usually easier to just replace the object content or the object itself
+    _drafts[_activeTabIndex] =
+        InvoiceDraft(
+            id: DateTime.now().millisecondsSinceEpoch.toString(),
+            title: 'New Sale', // Reset title
+          )
+          ..taxRate =
+              _globalTaxRate // [NEW]
+          ..taxType = _globalTaxType; // [NEW]
     notifyListeners();
   }
 }

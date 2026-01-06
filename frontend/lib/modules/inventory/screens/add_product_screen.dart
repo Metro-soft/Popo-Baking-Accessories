@@ -489,6 +489,10 @@ class _AddProductScreenState extends State<AddProductScreen> {
                   value: 'raw_material',
                   child: Text('Raw Material (Internal Use)'),
                 ),
+                DropdownMenuItem(
+                  value: 'service',
+                  child: Text('Service (Delivery, Labor)'),
+                ),
               ],
               onChanged: (val) {
                 setState(() {
@@ -500,48 +504,71 @@ class _AddProductScreenState extends State<AddProductScreen> {
             const SizedBox(height: 16),
 
             // Selling & Cost Row
-            Row(
-              children: [
-                Expanded(
-                  child: TextFormField(
-                    initialValue: _sellingPrice > 0
-                        ? _sellingPrice.toString()
-                        : null,
-                    decoration: const InputDecoration(
-                      labelText: 'Base Selling Price',
-                      prefixText: 'KES ',
-                      border: OutlineInputBorder(),
+            if (_type != 'raw_material') ...[
+              Row(
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      initialValue: _sellingPrice > 0
+                          ? _sellingPrice.toString()
+                          : null,
+                      decoration: InputDecoration(
+                        labelText: _type == 'service'
+                            ? 'Service Fee'
+                            : _type == 'asset_rental'
+                            ? 'Daily Rental Rate'
+                            : 'Base Selling Price',
+                        prefixText: 'KES ',
+                        border: const OutlineInputBorder(),
+                      ),
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      validator: (v) => v == null || double.tryParse(v) == null
+                          ? 'Invalid'
+                          : null,
+                      onSaved: (v) =>
+                          _sellingPrice = double.tryParse(v ?? '0') ?? 0.0,
                     ),
-                    keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true,
-                    ),
-                    validator: (v) => v == null || double.tryParse(v) == null
-                        ? 'Invalid'
-                        : null,
-                    onSaved: (v) =>
-                        _sellingPrice = double.tryParse(v ?? '0') ?? 0.0,
                   ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: TextFormField(
-                    initialValue: _costPrice > 0 ? _costPrice.toString() : null,
-                    decoration: const InputDecoration(
-                      labelText: 'Cost Price',
-                      prefixText: 'KES ',
-                      helperText: 'For Margin Calc',
-                      border: OutlineInputBorder(),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: TextFormField(
+                      initialValue: _costPrice > 0
+                          ? _costPrice.toString()
+                          : null,
+                      decoration: const InputDecoration(
+                        labelText: 'Cost Price',
+                        prefixText: 'KES ',
+                        helperText: 'For Margin Calc',
+                        border: OutlineInputBorder(),
+                      ),
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      onSaved: (v) =>
+                          _costPrice = double.tryParse(v ?? '0') ?? 0.0,
                     ),
-                    keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true,
-                    ),
-                    onSaved: (v) =>
-                        _costPrice = double.tryParse(v ?? '0') ?? 0.0,
                   ),
+                ],
+              ),
+              const SizedBox(height: 16),
+            ] else ...[
+              // Raw Material only needs Cost Price
+              TextFormField(
+                initialValue: _costPrice > 0 ? _costPrice.toString() : null,
+                decoration: const InputDecoration(
+                  labelText: 'Cost Price',
+                  prefixText: 'KES ',
+                  border: OutlineInputBorder(),
                 ),
-              ],
-            ),
-            const SizedBox(height: 16),
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                onSaved: (v) => _costPrice = double.tryParse(v ?? '0') ?? 0.0,
+              ),
+              const SizedBox(height: 16),
+            ],
 
             // Category & Color
             Row(
@@ -573,77 +600,85 @@ class _AddProductScreenState extends State<AddProductScreen> {
                     validator: (v) => v == null ? 'Required' : null,
                   ),
                 ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: TextFormField(
-                    initialValue: _color,
-                    textCapitalization: TextCapitalization.words,
-                    decoration: const InputDecoration(
-                      labelText: 'Color / Variant',
-                      hintText: 'e.g. Red, 5kg',
-                      border: OutlineInputBorder(),
+                if (_type != 'service') ...[
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: TextFormField(
+                      initialValue: _color,
+                      textCapitalization: TextCapitalization.words,
+                      decoration: const InputDecoration(
+                        labelText: 'Color / Variant',
+                        hintText: 'e.g. Red, 5kg',
+                        border: OutlineInputBorder(),
+                      ),
+                      onSaved: (v) {
+                        if (v == null || v.isEmpty) {
+                          _color = null;
+                          return;
+                        }
+                        _color = v
+                            .trim()
+                            .split(' ')
+                            .map((word) {
+                              if (word.isEmpty) return '';
+                              return '${word[0].toUpperCase()}${word.substring(1).toLowerCase()}';
+                            })
+                            .join(' ');
+                      },
                     ),
-                    onSaved: (v) {
-                      if (v == null || v.isEmpty) {
-                        _color = null;
-                        return;
-                      }
-                      _color = v
-                          .trim()
-                          .split(' ')
-                          .map((word) {
-                            if (word.isEmpty) return '';
-                            return '${word[0].toUpperCase()}${word.substring(1).toLowerCase()}';
-                          })
-                          .join(' ');
-                    },
                   ),
-                ),
+                ],
               ],
             ),
             const SizedBox(height: 16),
-            const Divider(),
-            const Text(
-              'Wholesale Settings',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: TextFormField(
-                    initialValue: _wholesalePrice?.toString(),
-                    decoration: const InputDecoration(
-                      labelText: 'Wholesale Price',
-                      prefixText: 'KES ',
-                      border: OutlineInputBorder(),
+
+            // Wholesale Settings (Hide for Raw Material AND Service)
+            if (_type != 'raw_material' && _type != 'service') ...[
+              const Divider(),
+              const Text(
+                'Wholesale Settings',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      initialValue: _wholesalePrice?.toString(),
+                      decoration: const InputDecoration(
+                        labelText: 'Wholesale Price',
+                        prefixText: 'KES ',
+                        border: OutlineInputBorder(),
+                      ),
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      onSaved: (v) => _wholesalePrice = v != null
+                          ? double.tryParse(v)
+                          : null,
                     ),
-                    keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true,
-                    ),
-                    onSaved: (v) =>
-                        _wholesalePrice = v != null ? double.tryParse(v) : null,
                   ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: TextFormField(
-                    initialValue: _minWholesaleQty > 0
-                        ? _minWholesaleQty.toString()
-                        : null,
-                    decoration: const InputDecoration(
-                      labelText: 'Min Qty',
-                      helperText: 'For Wholesale',
-                      border: OutlineInputBorder(),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: TextFormField(
+                      initialValue: _minWholesaleQty > 0
+                          ? _minWholesaleQty.toString()
+                          : null,
+                      decoration: const InputDecoration(
+                        labelText: 'Min Qty',
+                        helperText: 'For Wholesale',
+                        border: OutlineInputBorder(),
+                      ),
+                      keyboardType: TextInputType.number,
+                      onSaved: (v) =>
+                          _minWholesaleQty = int.tryParse(v ?? '0') ?? 0,
                     ),
-                    keyboardType: TextInputType.number,
-                    onSaved: (v) =>
-                        _minWholesaleQty = int.tryParse(v ?? '0') ?? 0,
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
+                ],
+              ),
+              const SizedBox(height: 16),
+            ],
+
             const Divider(),
 
             // Conditional Rental Deposit
@@ -671,17 +706,19 @@ class _AddProductScreenState extends State<AddProductScreen> {
               const SizedBox(height: 16),
             ],
 
-            // Reorder Level
-            TextFormField(
-              initialValue: _reorderLevel.toString(),
-              decoration: const InputDecoration(
-                labelText: 'Low Stock Alert Level',
-                border: OutlineInputBorder(),
+            // Reorder Level (Hide for Service)
+            if (_type != 'service') ...[
+              TextFormField(
+                initialValue: _reorderLevel.toString(),
+                decoration: const InputDecoration(
+                  labelText: 'Low Stock Alert Level',
+                  border: OutlineInputBorder(),
+                ),
+                keyboardType: TextInputType.number,
+                onSaved: (v) => _reorderLevel = int.tryParse(v ?? '10') ?? 10,
               ),
-              keyboardType: TextInputType.number,
-              onSaved: (v) => _reorderLevel = int.tryParse(v ?? '10') ?? 10,
-            ),
-            const SizedBox(height: 24),
+              const SizedBox(height: 24),
+            ],
 
             // Submit Button
             SizedBox(

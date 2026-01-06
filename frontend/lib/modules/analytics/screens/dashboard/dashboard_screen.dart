@@ -533,8 +533,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     itemBuilder: (ctx, i) {
                       final p = _topProducts[i];
                       return _buildProductItem(
-                        p['name'],
-                        p['sku'],
+                        (p['product_name'] ?? p['name'] ?? 'Unknown')
+                            .toString(),
+                        p['sku'] ?? '',
                         p['total_sold'].toString(),
                         Colors.deepPurple,
                       );

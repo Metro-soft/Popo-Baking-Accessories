@@ -5,10 +5,24 @@ CREATE TYPE product_type AS ENUM ('retail', 'asset_rental', 'raw_material', 'ser
 DROP TYPE IF EXISTS user_role CASCADE;
 CREATE TYPE user_role AS ENUM ('admin', 'manager', 'cashier');
 
-DROP TYPE IF EXISTS stock_location CASCADE;
-CREATE TYPE stock_location AS ENUM ('thika_store', 'cbd_store', 'warehouse');
+-- [REMOVED] stock_location ENUM (Replaced by dynamic locations table)
 
--- 2. USERS TABLE (Staff Management)
+-- 2. LOCATIONS (Multi-Branch & Warehouse Support)
+DROP TABLE IF EXISTS locations CASCADE;
+CREATE TABLE locations (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL UNIQUE,
+    type VARCHAR(20) NOT NULL CHECK (type IN ('warehouse', 'branch')), -- Mother vs Child
+    address TEXT,
+    contact_phone VARCHAR(20),
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Seed Default Data (Reference only)
+-- INSERT INTO locations (name, type) VALUES ('Main Warehouse', 'warehouse');
+
+-- 3. USERS TABLE (Staff Management)
 DROP TABLE IF EXISTS users CASCADE;
 CREATE TABLE users (
     id SERIAL PRIMARY KEY,
@@ -18,65 +32,66 @@ CREATE TABLE users (
     role user_role DEFAULT 'cashier',
     phone VARCHAR(20),
     is_active BOOLEAN DEFAULT TRUE,
-    daily_expense_limit DECIMAL(10, 2) DEFAULT 200.00, -- "Remote Control" limit
+    daily_expense_limit DECIMAL(10, 2) DEFAULT 200.00,
+    branch_id INT REFERENCES locations(id) DEFAULT 1, -- [NEW] User assigned to a branch
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 3. PRODUCTS (The Catalogue - Source of Truth)
+-- 4. PRODUCTS (The Catalogue - Source of Truth)
 DROP TABLE IF EXISTS products CASCADE;
 CREATE TABLE products (
     id SERIAL PRIMARY KEY,
     name VARCHAR(150) NOT NULL,
-    sku VARCHAR(50) UNIQUE NOT NULL, -- Barcode/Manual Code
-    type product_type NOT NULL, -- Crucial: Dictates if it can be rented
+    sku VARCHAR(50) UNIQUE NOT NULL,
+    type product_type NOT NULL,
     description TEXT,
     base_selling_price DECIMAL(10, 2) NOT NULL,
-    rental_deposit_amount DECIMAL(10, 2) DEFAULT 0.00, -- Only for rentals
-    reorder_level INT DEFAULT 10, -- Low stock alert trigger
+    rental_deposit_amount DECIMAL(10, 2) DEFAULT 0.00,
+    reorder_level INT DEFAULT 10,
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 4. INVENTORY BATCHES (The "True Cost" Engine)
+-- 5. INVENTORY BATCHES (The "True Cost" Engine)
 DROP TABLE IF EXISTS inventory_batches CASCADE;
 CREATE TABLE inventory_batches (
     id SERIAL PRIMARY KEY,
     product_id INT REFERENCES products(id),
-    batch_number VARCHAR(50), -- From Supplier Invoice
-    location stock_location NOT NULL,
+    batch_number VARCHAR(50),
+    branch_id INT REFERENCES locations(id) DEFAULT 1, -- [UPDATED] Replaces location ENUM
     quantity_initial INT NOT NULL,
     quantity_remaining INT NOT NULL,
-    buying_price_unit DECIMAL(10, 2) NOT NULL, -- Calculated Landed Cost
-    expiry_date DATE, -- For Cream/Chocolate
+    buying_price_unit DECIMAL(10, 2) NOT NULL,
+    expiry_date DATE,
     received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 5. RENTAL ASSETS (Individual Tracking for Hires)
+-- 6. RENTAL ASSETS (Individual Tracking for Hires)
 DROP TABLE IF EXISTS rental_assets CASCADE;
 CREATE TABLE rental_assets (
     id SERIAL PRIMARY KEY,
     product_id INT REFERENCES products(id),
-    serial_number VARCHAR(50) UNIQUE NOT NULL, -- e.g., "GS-001"
+    serial_number VARCHAR(50) UNIQUE NOT NULL,
     condition_notes TEXT DEFAULT 'New',
-    status VARCHAR(20) DEFAULT 'available', -- available, rented, maintenance
-    current_location stock_location DEFAULT 'thika_store'
+    status VARCHAR(20) DEFAULT 'available',
+    current_location_id INT REFERENCES locations(id) DEFAULT 1 -- [UPDATED] Replaces location ENUM
 );
 
--- 6. AUDIT LOGS (The "Zero Trust" Black Box)
+-- 7. AUDIT LOGS
 DROP TABLE IF EXISTS audit_logs CASCADE;
 CREATE TABLE audit_logs (
     id BIGSERIAL PRIMARY KEY,
     user_id INT REFERENCES users(id),
-    action VARCHAR(50) NOT NULL, -- e.g., "VOID_SALE", "UPDATE_PRICE"
+    action VARCHAR(50) NOT NULL,
     table_affected VARCHAR(50),
     record_id INT,
-    old_value JSONB, -- Stores the data before change
-    new_value JSONB, -- Stores the data after change
+    old_value JSONB,
+    new_value JSONB,
     ip_address VARCHAR(45),
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 7. PHASE 2: SUPPLY CHAIN (Suppliers & POs)
+-- 8. SUPPLY CHAIN (Suppliers & POs)
 DROP TABLE IF EXISTS po_items CASCADE;
 DROP TABLE IF EXISTS purchase_orders CASCADE;
 DROP TABLE IF EXISTS suppliers CASCADE;
@@ -107,17 +122,18 @@ CREATE TABLE po_items (
     supplier_unit_price DECIMAL(10, 2) NOT NULL
 );
 
--- 8. PHASE 3: SALES & ORDERS
+-- 9. SALES & ORDERS
 DROP TABLE IF EXISTS payments CASCADE;
 DROP TABLE IF EXISTS order_items CASCADE;
 DROP TABLE IF EXISTS orders CASCADE;
 
 CREATE TABLE orders (
     id SERIAL PRIMARY KEY,
-    customer_id INT REFERENCES users(id), -- For Debt tracking later (nullable)
+    customer_id INT REFERENCES users(id),
     total_amount DECIMAL(10, 2) NOT NULL,
     total_deposit DECIMAL(10, 2) DEFAULT 0.00,
     status VARCHAR(20) DEFAULT 'completed',
+    branch_id INT REFERENCES locations(id), -- [NEW] Sales per branch
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -128,19 +144,30 @@ CREATE TABLE order_items (
     quantity INT NOT NULL,
     unit_price DECIMAL(10, 2) NOT NULL,
     subtotal DECIMAL(10, 2) NOT NULL,
-    type VARCHAR(20) NOT NULL, -- retail, asset_rental, service_print
-    
-    -- Rental Specifics
+    type VARCHAR(20) NOT NULL,
     rental_serial_number VARCHAR(50), 
     rental_deposit DECIMAL(10, 2) DEFAULT 0.00,
-    rental_return_status VARCHAR(20) DEFAULT 'pending' -- pending, returned, forfeited
+    rental_return_status VARCHAR(20) DEFAULT 'pending'
 );
 
 CREATE TABLE payments (
     id SERIAL PRIMARY KEY,
     order_id INT REFERENCES orders(id),
-    method VARCHAR(20) NOT NULL, -- cash, mpesa, credit
+    method VARCHAR(20) NOT NULL,
     amount DECIMAL(10, 2) NOT NULL,
-    reference_code VARCHAR(100), -- M-Pesa Code
+    reference_code VARCHAR(100),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 10. STOCK MOVEMENTS (History)
+DROP TABLE IF EXISTS stock_movements CASCADE;
+CREATE TABLE stock_movements (
+    id BIGSERIAL PRIMARY KEY,
+    product_id INT REFERENCES products(id),
+    branch_id INT REFERENCES locations(id), -- [NEW] Movement per branch
+    type VARCHAR(20) NOT NULL, -- sale, return, adjustment, transfer_in, transfer_out
+    quantity INT NOT NULL, -- Positive or Negative
+    reason TEXT,
+    reference_id INT, -- Order ID or Transfer ID
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

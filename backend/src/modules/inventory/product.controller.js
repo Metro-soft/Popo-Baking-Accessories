@@ -95,13 +95,17 @@ exports.createProduct = async (req, res) => {
 
 exports.getProducts = async (req, res) => {
     try {
-        const { branchId } = req.query;
+        const { branchId, search } = req.query;
+
         let query = `
             SELECT p.*, COALESCE(SUM(ib.quantity_remaining), 0) as stock_level
             FROM products p
         `;
 
         const params = [];
+        let whereClauses = ['p.is_active = true']; // [NEW] Soft Delete Filter
+
+        // Join Logic
         if (branchId) {
             query += ` LEFT JOIN inventory_batches ib ON p.id = ib.product_id AND ib.branch_id = $1`;
             params.push(branchId);
@@ -109,11 +113,21 @@ exports.getProducts = async (req, res) => {
             query += ` LEFT JOIN inventory_batches ib ON p.id = ib.product_id`;
         }
 
+        // Search Logic
+        if (search) {
+            const searchParamIndex = params.length + 1;
+            whereClauses.push(`(LOWER(p.name) LIKE LOWER($${searchParamIndex}) OR LOWER(p.sku) LIKE LOWER($${searchParamIndex}))`);
+            params.push(`%${search}%`);
+        }
+
+        // Apply Where Clauses
+        if (whereClauses.length > 0) {
+            query += ` WHERE ${whereClauses.join(' AND ')}`;
+        }
+
         query += ` GROUP BY p.id ORDER BY p.created_at DESC`;
 
         const result = await db.query(query, params);
-        // Note: stock_level comes as string from COUNT/SUM usually, convert in frontend or cast here?
-        // JS driver often returns BigInt as string. Parsing in frontend map is safer.
         res.json(result.rows);
     } catch (err) {
         console.error('Get Products Error:', err);
@@ -128,7 +142,7 @@ exports.getProductById = async (req, res) => {
             SELECT p.*, COALESCE(SUM(ib.quantity_remaining), 0) as stock_level
             FROM products p
             LEFT JOIN inventory_batches ib ON p.id = ib.product_id
-            WHERE p.id = $1
+            WHERE p.id = $1 AND p.is_active = true
             GROUP BY p.id
         `, [id]);
 
@@ -198,19 +212,45 @@ exports.updateProduct = async (req, res) => {
 exports.deleteProduct = async (req, res) => {
     const { id } = req.params;
     try {
-        // Warning: This might fail if foreign keys (inventory_batches) exist. 
-        // We should ideally soft delete or check cascade. 
-        // For now, hard delete is requested to 'fix mistakes'.
-        const result = await db.query('DELETE FROM products WHERE id = $1 RETURNING id', [id]);
+        // [NEW] Soft Delete Implementation
+        const result = await db.query('UPDATE products SET is_active = false WHERE id = $1 RETURNING id', [id]);
+
         if (result.rows.length === 0) {
             return res.status(404).json({ error: 'Product not found' });
         }
-        res.json({ message: 'Product deleted' });
+        res.json({ message: 'Product archived successfully' });
     } catch (err) {
         console.error('Delete Product Error:', err);
-        if (err.code === '23503') { // Foreign key violation
-            return res.status(400).json({ error: 'Cannot delete product with existing stock history.' });
+        res.status(500).json({ error: 'Database error' });
+    }
+};
+
+exports.getTrashedProducts = async (req, res) => {
+    try {
+        // Fetch all inactive products
+        const result = await db.query(`
+            SELECT * FROM products 
+            WHERE is_active = false 
+            ORDER BY created_at DESC
+        `);
+        res.json(result.rows);
+    } catch (err) {
+        console.error('Get Trash Error:', err);
+        res.status(500).json({ error: 'Database error' });
+    }
+};
+
+exports.restoreProduct = async (req, res) => {
+    const { id } = req.params;
+    try {
+        const result = await db.query('UPDATE products SET is_active = true WHERE id = $1 RETURNING *', [id]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'Product not found' });
         }
+        res.json({ message: 'Product restored successfully', product: result.rows[0] });
+    } catch (err) {
+        console.error('Restore Product Error:', err);
         res.status(500).json({ error: 'Database error' });
     }
 };

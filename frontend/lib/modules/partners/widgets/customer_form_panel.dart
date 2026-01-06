@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../../core/services/settings_service.dart';
 
@@ -23,6 +24,7 @@ class _CustomerFormPanelState extends State<CustomerFormPanel> {
   late TextEditingController _phoneController;
   late TextEditingController _altPhoneController;
   late TextEditingController _emailController;
+  late TextEditingController _regionController; // [NEW]
   late TextEditingController _addressController;
   late TextEditingController _limitController;
   late TextEditingController _openingBalanceController;
@@ -30,17 +32,58 @@ class _CustomerFormPanelState extends State<CustomerFormPanel> {
   final SettingsService _settingsService = SettingsService();
   String _defaultCountryCode = '254';
 
-  final List<String> _pickupPoints = [
-    'Ndhiwa - Main Stage',
-    'Ndhiwa - Rubis Station',
-    'Ndhiwa - Market Center',
-    'Rodi Kopany - Main Stage',
-    'Homa Bay - Town CBD',
-    'Homa Bay - Total Station',
-    'Mbita - Ferry Terminal',
-    'Sindo - Main Market',
-    'Other (Specify in Notes)',
-  ];
+  List<String> _regions = [
+    'Mbita',
+    'Homa Bay',
+    'Rongo',
+    'Ndhiwa',
+    'Rodi Kopany',
+    'Sindo',
+    'Oyugis',
+    'Awendo',
+    'Migori',
+    'Kisii',
+  ]; // [UPDATED] - Default fallback
+
+  Future<void> _fetchSettings() async {
+    try {
+      final settings = await _settingsService.fetchSettings();
+      if (mounted) {
+        setState(() {
+          _defaultCountryCode = settings['default_country_code'] ?? '254';
+
+          if (settings['delivery_regions'] != null) {
+            try {
+              List<dynamic> decoded = jsonDecode(
+                settings['delivery_regions'] as String,
+              );
+              _regions = decoded.map((e) {
+                if (e is Map) return e['name'].toString();
+                return e.toString();
+              }).toList();
+            } catch (e) {
+              // Fallback if parsing fails, keep defaults
+              debugPrint('Error parsing regions: $e');
+            }
+          }
+        });
+      }
+    } catch (e) {
+      debugPrint('Error fetching settings in form: $e');
+    }
+  }
+
+  String _formatPhoneNumber(String phone) {
+    String cleaned = phone.replaceAll(RegExp(r'[^0-9]'), '');
+    if (cleaned.startsWith('0')) {
+      return _defaultCountryCode + cleaned.substring(1);
+    } else if (!cleaned.startsWith(_defaultCountryCode)) {
+      if (cleaned.length == 9) {
+        return _defaultCountryCode + cleaned;
+      }
+    }
+    return cleaned;
+  }
 
   @override
   void initState() {
@@ -61,6 +104,9 @@ class _CustomerFormPanelState extends State<CustomerFormPanel> {
     _addressController = TextEditingController(
       text: widget.customer?['address'] ?? '',
     );
+    _regionController = TextEditingController(
+      text: widget.customer?['region'] ?? '',
+    ); // [NEW]
     _limitController = TextEditingController(
       text: widget.customer?['credit_limit']?.toString() ?? '0',
     );
@@ -76,67 +122,33 @@ class _CustomerFormPanelState extends State<CustomerFormPanel> {
     _altPhoneController.dispose();
     _emailController.dispose();
     _addressController.dispose();
+    _regionController.dispose(); // [NEW]
     _limitController.dispose();
     _openingBalanceController.dispose();
     super.dispose();
   }
 
-  Future<void> _fetchSettings() async {
-    try {
-      final settings = await _settingsService.fetchSettings();
-      if (mounted) {
-        setState(() {
-          _defaultCountryCode = settings['default_country_code'] ?? '254';
-        });
-      }
-    } catch (e) {
-      debugPrint('Error fetching settings in form: $e');
-    }
-  }
-
   void _submit() {
     if (_formKey.currentState!.validate()) {
-      // Auto-format phone numbers
       String phone = _phoneController.text.trim();
       String altPhone = _altPhoneController.text.trim();
-
       phone = _formatPhoneNumber(phone);
-      if (altPhone.isNotEmpty) {
-        altPhone = _formatPhoneNumber(altPhone);
-      }
+      if (altPhone.isNotEmpty) altPhone = _formatPhoneNumber(altPhone);
 
       final data = {
         'name': _nameController.text.trim(),
         'phone': phone,
         'alt_phone': altPhone,
         'email': _emailController.text.trim(),
-        'address': _addressController.text.trim(),
+        'address': _addressController.text
+            .trim(), // Kept key as address effectively Landmark
+        'region': _regionController.text.trim(), // [NEW]
         'credit_limit': double.tryParse(_limitController.text.trim()) ?? 0.0,
         'opening_balance':
             double.tryParse(_openingBalanceController.text.trim()) ?? 0.0,
       };
       widget.onSave(data);
     }
-  }
-
-  String _formatPhoneNumber(String phone) {
-    // Remove non-digit characters
-    String cleaned = phone.replaceAll(RegExp(r'[^0-9]'), '');
-
-    if (cleaned.startsWith('0')) {
-      // Replace leading 0 with country code
-      return _defaultCountryCode + cleaned.substring(1);
-    } else if (!cleaned.startsWith(_defaultCountryCode)) {
-      // If it doesn't start with 0 and doesn't start with country code, prepend it
-      // Validating length might be risky if they have short numbers, but typically 9 digits for mobile without 0
-      // Let's safe-guard: if length is 9 (common for NSN), prepend.
-      if (cleaned.length == 9) {
-        return _defaultCountryCode + cleaned;
-      }
-      // If user entered just 123456789 (9 digits), we prepend.
-      // If they entered 254... (12 digits), we leave it.
-    }
-    return cleaned;
   }
 
   @override
@@ -242,57 +254,65 @@ class _CustomerFormPanelState extends State<CustomerFormPanel> {
                       },
                     ),
                     const SizedBox(height: 16),
+
+                    // Region Field
                     LayoutBuilder(
                       builder: (context, constraints) {
                         return Autocomplete<String>(
-                          optionsBuilder: (TextEditingValue textEditingValue) {
-                            if (textEditingValue.text == '') {
+                          optionsBuilder: (TextEditingValue val) {
+                            if (val.text == '') {
                               return const Iterable<String>.empty();
                             }
-                            return _pickupPoints.where((String option) {
-                              return option.toLowerCase().contains(
-                                textEditingValue.text.toLowerCase(),
-                              );
-                            });
+                            return _regions.where(
+                              (opt) => opt.toLowerCase().contains(
+                                val.text.toLowerCase(),
+                              ),
+                            );
                           },
-                          onSelected: (String selection) {
-                            _addressController.text = selection;
-                          },
+                          onSelected: (selection) =>
+                              _regionController.text = selection,
                           fieldViewBuilder:
-                              (
-                                BuildContext context,
-                                TextEditingController
-                                fieldTextEditingController,
-                                FocusNode fieldFocusNode,
-                                VoidCallback onFieldSubmitted,
-                              ) {
-                                // Sync logic
-                                if (_addressController.text.isNotEmpty &&
-                                    fieldTextEditingController.text.isEmpty) {
-                                  fieldTextEditingController.text =
-                                      _addressController.text;
+                              (context, controller, focusNode, onUnfocus) {
+                                if (_regionController.text.isNotEmpty &&
+                                    controller.text.isEmpty) {
+                                  controller.text = _regionController.text;
                                 }
-                                fieldTextEditingController.addListener(() {
-                                  _addressController.text =
-                                      fieldTextEditingController.text;
-                                });
-
+                                controller.addListener(
+                                  () =>
+                                      _regionController.text = controller.text,
+                                );
                                 return TextFormField(
-                                  controller: fieldTextEditingController,
-                                  focusNode: fieldFocusNode,
+                                  controller: controller,
+                                  focusNode: focusNode,
                                   decoration: const InputDecoration(
-                                    labelText:
-                                        'Delivery Landmark / Pickup Point',
+                                    labelText: 'Region / Town',
                                     border: OutlineInputBorder(),
-                                    prefixIcon: Icon(
-                                      Icons.local_shipping_outlined,
-                                    ),
-                                    helperText: 'e.g. "Shell Petrol Station"',
+                                    prefixIcon: Icon(Icons.map),
+                                    helperText: 'e.g. Mbita, Homa Bay, Rongo',
                                   ),
+                                  validator: (val) => val == null || val.isEmpty
+                                      ? 'Region is required'
+                                      : null,
                                 );
                               },
                         );
                       },
+                    ),
+
+                    const SizedBox(height: 16),
+
+                    // Specific Location (formerly Address/Landmark)
+                    TextFormField(
+                      controller: _addressController,
+                      decoration: const InputDecoration(
+                        labelText: 'Specific Landmark / Pickup Point',
+                        border: OutlineInputBorder(),
+                        prefixIcon: Icon(Icons.location_on),
+                        helperText: 'e.g. "Ferry Terminal", "Opposite Equity"',
+                      ),
+                      validator: (val) => val == null || val.isEmpty
+                          ? 'Landmark is required'
+                          : null,
                     ),
                     const SizedBox(height: 16),
                     const SizedBox(height: 16),

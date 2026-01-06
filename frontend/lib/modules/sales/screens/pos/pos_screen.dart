@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../../providers/sales_provider.dart';
 import '../../widgets/invoice_table.dart';
@@ -10,7 +12,10 @@ import '../../services/receipt_service.dart';
 
 class SalesInvoiceScreen extends StatefulWidget {
   final VoidCallback? onExit;
-  const SalesInvoiceScreen({super.key, this.onExit});
+  final List<Map<String, dynamic>>?
+  initialItems; // { 'product': Product, 'quantity': double }
+
+  const SalesInvoiceScreen({super.key, this.onExit, this.initialItems});
 
   @override
   State<SalesInvoiceScreen> createState() => _SalesInvoiceScreenState();
@@ -22,38 +27,154 @@ class _SalesInvoiceScreenState extends State<SalesInvoiceScreen>
 
   // Future for initial load
   late Future<List<Product>> _initialLoadFuture;
+  Future<List<dynamic>>? _topProductsFuture; // [MODIFIED] Nullable for safety
+
+  // Local state for product catalog
 
   // Local state for product catalog
   List<Product> _allProducts = [];
   late TabController _productTabController;
 
+  // Barcode Scanning
+  String _barcodeBuffer = '';
+  DateTime _lastBarcodeKeyTime = DateTime.now();
+
+  // Search
+
+  Timer? _debounce;
+
+  // Controllers
+  late TextEditingController _mpesaPhoneCtrl; // [NEW]
+
   @override
   void initState() {
     super.initState();
+    _mpesaPhoneCtrl = TextEditingController(); // [NEW]
     _productTabController = TabController(length: 3, vsync: this);
     // Initialize the future ONCE to prevent loops
     _initialLoadFuture = _loadData();
+    _topProductsFuture = _apiService.getTopProducts(); // [NEW] Fetch Top
+    HardwareKeyboard.instance.addHandler(_onKey);
+
+    // Handle Initial Items (e.g. from Quote Conversion)
+    if (widget.initialItems != null && widget.initialItems!.isNotEmpty) {
+      debugPrint(
+        'POS: Processing ${widget.initialItems!.length} initial items...',
+      );
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final provider = Provider.of<SalesProvider>(context, listen: false);
+        provider.resetActiveDraft();
+        for (final item in widget.initialItems!) {
+          final product = item['product'] as Product;
+          final qty = double.tryParse(item['quantity'].toString()) ?? 1.0;
+          provider.addItem(product, quantity: qty);
+        }
+      });
+    }
+
+    // Refresh Tax Settings
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<SalesProvider>().refreshTaxSettings();
+    });
   }
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_onKey);
     _productTabController.dispose();
+    _mpesaPhoneCtrl.dispose(); // [NEW]
+    _debounce?.cancel();
     super.dispose();
   }
 
-  Future<List<Product>> _loadData() async {
+  Future<List<Product>> _loadData({String? search}) async {
     try {
-      debugPrint('POS: Starting Safe Load...');
-      final products = await _apiService.getProducts().timeout(
-        const Duration(seconds: 10),
-        onTimeout: () => throw Exception('Connection Timeout'),
-      );
+      debugPrint('POS: Loading Data (Search: $search)...');
+      final products = await _apiService
+          .getProducts(search: search)
+          .timeout(
+            const Duration(seconds: 10),
+            onTimeout: () => throw Exception('Connection Timeout'),
+          );
       debugPrint('POS: Loaded ${products.length} products');
       _allProducts = products; // Store locally for filtering
       return products;
     } catch (e) {
       debugPrint('POS: Load Failed: $e');
       rethrow;
+    }
+  }
+
+  // --- Barcode Handling ---
+
+  bool _onKey(KeyEvent event) {
+    if (!mounted) return false;
+    // Prevent scanning if this screen is not top-most (e.g. covered by dialog or other screen)
+    if (ModalRoute.of(context)?.isCurrent != true) return false;
+
+    if (event is KeyDownEvent) {
+      final String? char = event.character;
+
+      // Logic:
+      // 1. If Enter is pressed, check buffer
+      // 2. If char is printable, append to buffer if rapid
+      // 3. Reset buffer if too slow
+
+      final now = DateTime.now();
+      if (now.difference(_lastBarcodeKeyTime).inMilliseconds > 100) {
+        // Reset if gap is too long (manual typing)
+        _barcodeBuffer = '';
+      }
+      _lastBarcodeKeyTime = now;
+
+      if (event.logicalKey == LogicalKeyboardKey.enter) {
+        if (_barcodeBuffer.isNotEmpty) {
+          _processBarcode(_barcodeBuffer);
+          _barcodeBuffer = '';
+          return true; // Handle enter to prevent newline in text fields? Maybe risky.
+        }
+      } else if (char != null &&
+          char.isNotEmpty &&
+          !RegExp(r'[\x00-\x1F]').hasMatch(char)) {
+        _barcodeBuffer += char;
+      }
+    }
+    return false; // Let it propagate
+  }
+
+  void _processBarcode(String code) {
+    // Find product by SKU or exact name match (or barcode field if it existed)
+    // Assuming SKU is the barcode for now, or match existing conventions.
+    final product = _allProducts.firstWhere(
+      (p) => p.sku == code || p.name == code,
+      orElse: () => Product(
+        id: -1,
+        name: '',
+        sku: '',
+        type: '',
+        baseSellingPrice: 0,
+      ), // Dummy
+    );
+
+    if (product.id != -1) {
+      context.read<SalesProvider>().addItem(product);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Scanned: ${product.name}'),
+          duration: const Duration(seconds: 1),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } else {
+      // Optional: don't annoy with errors if it was just random typing?
+      // But if it was rapid + enter, it was likely a scan.
+      // print('Unknown Barcode: $code');
+      // Uncomment to debug:
+      /*
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Unknown Item: $code')),
+      );
+      */
     }
   }
 
@@ -125,6 +246,9 @@ class _SalesInvoiceScreenState extends State<SalesInvoiceScreen>
       'isHold': isHold,
       'discountAmount': draft.discountAmount,
       'discountReason': 'Manual',
+      'taxAmount': draft.taxType == 'Inclusive'
+          ? 0
+          : draft.calculateTax, // Only send Tax if Exclusive (to be added)
       'roundOff': draft.roundOff,
       'depositChange': draft.depositChange,
       'paymentTerms': draft.paymentTerms,
@@ -155,6 +279,8 @@ class _SalesInvoiceScreenState extends State<SalesInvoiceScreen>
                 },
               },
             ],
+      // [NEW] Dispatch Details
+      'isDispatch': draft.isDispatch,
     };
 
     try {
@@ -164,7 +290,14 @@ class _SalesInvoiceScreenState extends State<SalesInvoiceScreen>
         builder: (_) => const Center(child: CircularProgressIndicator()),
       );
 
-      final result = await _apiService.processTransaction(payload);
+      Map<String, dynamic> result;
+      if (draft.editingOrderId != null) {
+        // Update Existing Sale
+        result = await _apiService.updateSale(draft.editingOrderId!, payload);
+      } else {
+        // Create New Sale
+        result = await _apiService.processTransaction(payload);
+      }
 
       if (!mounted) return;
       Navigator.pop(context); // Close loading
@@ -201,6 +334,7 @@ class _SalesInvoiceScreenState extends State<SalesInvoiceScreen>
 
       if (!mounted) return;
       // Success Feedback & Reset
+      // Success Feedback & Reset
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(isHold ? 'Draft Held' : 'Transaction Complete!'),
@@ -208,8 +342,22 @@ class _SalesInvoiceScreenState extends State<SalesInvoiceScreen>
         ),
       );
 
-      sales.closeTab(sales.activeTabIndex);
-      if (sales.drafts.isEmpty) sales.addTab();
+      // Auto-Clear Logic for Complete Sales
+      if (!isHold) {
+        final isFullPayment =
+            draft.amountTendered >= (draft.totalPayable - 0.01);
+        if (isFullPayment) {
+          sales.resetActiveDraft();
+        } else {
+          // Optionally do nothing or handle partial logic
+          // For now, we only auto-clear if 'Complete' as requested
+        }
+      } else {
+        // If held, maybe we just close the tab or reset?
+        // Original logic was closing tab. Let's stick to standard behavior for Hold.
+        sales.closeTab(sales.activeTabIndex);
+        if (sales.drafts.isEmpty) sales.addTab();
+      }
     } catch (e) {
       if (!mounted) return;
       Navigator.pop(context); // Close loading
@@ -325,6 +473,183 @@ class _SalesInvoiceScreenState extends State<SalesInvoiceScreen>
           tooltip: 'Back to Dashboard',
         ),
         actions: [
+          // Dispatch Toggle
+          Consumer<SalesProvider>(
+            builder: (context, sales, _) {
+              final isDispatch = sales.activeDraft.isDispatch;
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                child: Row(
+                  children: [
+                    Text(
+                      'Dispatch',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: isDispatch ? Colors.orange : Colors.grey,
+                      ),
+                    ),
+                    Switch(
+                      value: isDispatch,
+                      activeTrackColor: Colors.orange,
+                      onChanged: (val) async {
+                        sales.toggleDispatchMode(val);
+                        if (val) {
+                          // Show Item Selection Dialog for Delivery/Bags
+                          await showDialog(
+                            context: context,
+                            builder: (ctx) => AlertDialog(
+                              title: const Text('Add Dispatch Items'),
+                              content: SizedBox(
+                                width: double.maxFinite,
+                                height: 400, // Constrain height for the list
+                                child: Column(
+                                  children: [
+                                    const Text(
+                                      'Select Delivery Service & Packaging from the list below.',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.grey,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 16),
+                                    Expanded(
+                                      child:
+                                          _allProducts.any(
+                                            (p) =>
+                                                p.type == 'service' ||
+                                                p.name.toLowerCase().contains(
+                                                  'delivery',
+                                                ) ||
+                                                p.name.toLowerCase().contains(
+                                                  'bag',
+                                                ) ||
+                                                p.name.toLowerCase().contains(
+                                                  'box',
+                                                ),
+                                          )
+                                          ? ListView.separated(
+                                              itemCount: _allProducts
+                                                  .where(
+                                                    (p) =>
+                                                        p.type == 'service' ||
+                                                        p.name
+                                                            .toLowerCase()
+                                                            .contains(
+                                                              'delivery',
+                                                            ) ||
+                                                        p.name
+                                                            .toLowerCase()
+                                                            .contains('bag') ||
+                                                        p.name
+                                                            .toLowerCase()
+                                                            .contains('box'),
+                                                  )
+                                                  .length,
+                                              separatorBuilder:
+                                                  (context, index) =>
+                                                      const Divider(height: 1),
+                                              itemBuilder: (context, index) {
+                                                final p = _allProducts
+                                                    .where(
+                                                      (p) =>
+                                                          p.type == 'service' ||
+                                                          p.name
+                                                              .toLowerCase()
+                                                              .contains(
+                                                                'delivery',
+                                                              ) ||
+                                                          p.name
+                                                              .toLowerCase()
+                                                              .contains(
+                                                                'bag',
+                                                              ) ||
+                                                          p.name
+                                                              .toLowerCase()
+                                                              .contains('box'),
+                                                    )
+                                                    .toList()[index];
+                                                return ListTile(
+                                                  title: Text(
+                                                    p.name,
+                                                    style: const TextStyle(
+                                                      fontWeight:
+                                                          FontWeight.bold,
+                                                    ),
+                                                  ),
+                                                  subtitle: Text(
+                                                    'KES ${p.baseSellingPrice.toStringAsFixed(0)}',
+                                                  ),
+                                                  trailing: IconButton.filledTonal(
+                                                    icon: const Icon(Icons.add),
+                                                    onPressed: () {
+                                                      sales.addItem(p);
+                                                      ScaffoldMessenger.of(
+                                                        context,
+                                                      ).showSnackBar(
+                                                        SnackBar(
+                                                          content: Text(
+                                                            'Added ${p.name}',
+                                                          ),
+                                                          duration:
+                                                              const Duration(
+                                                                milliseconds:
+                                                                    800,
+                                                              ),
+                                                        ),
+                                                      );
+                                                    },
+                                                  ),
+                                                );
+                                              },
+                                            )
+                                          : const Center(
+                                              child: Column(
+                                                mainAxisAlignment:
+                                                    MainAxisAlignment.center,
+                                                children: [
+                                                  Icon(
+                                                    Icons.inventory_2_outlined,
+                                                    size: 48,
+                                                    color: Colors.grey,
+                                                  ),
+                                                  SizedBox(height: 16),
+                                                  Text(
+                                                    'No Dispatch Items Found',
+                                                    style: TextStyle(
+                                                      color: Colors.grey,
+                                                    ),
+                                                  ),
+                                                  Text(
+                                                    'Add products with "Delivery", "Bag", or "Box" in name.',
+                                                    textAlign: TextAlign.center,
+                                                    style: TextStyle(
+                                                      fontSize: 11,
+                                                      color: Colors.grey,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.pop(ctx),
+                                  child: const Text('Done'),
+                                ),
+                              ],
+                            ),
+                          );
+                        }
+                      },
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
           // Draft Management Tabs in AppBar for cleanliness
           Consumer<SalesProvider>(
             builder: (context, sales, _) {
@@ -406,9 +731,9 @@ class _SalesInvoiceScreenState extends State<SalesInvoiceScreen>
       body: Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // LEFT PANEL: Product Catalog (Flex 3)
+          // LEFT PANEL: Product Catalog (Flex 2)
           Expanded(
-            flex: 3,
+            flex: 2,
             child: Container(
               margin: const EdgeInsets.fromLTRB(16, 16, 8, 16),
               decoration: BoxDecoration(
@@ -461,15 +786,181 @@ class _SalesInvoiceScreenState extends State<SalesInvoiceScreen>
                                 borderRadius: BorderRadius.circular(12),
                                 borderSide: BorderSide.none,
                               ),
+                              isDense: true, // Reduced density
                             ),
                             onChanged: (val) {
-                              // Implement local filter if needed,
-                              // or just rely on 'Quick Add' in right panel
+                              if (_debounce?.isActive ?? false) {
+                                _debounce!.cancel();
+                              }
+                              _debounce = Timer(
+                                const Duration(milliseconds: 500),
+                                () {
+                                  setState(() {
+                                    _initialLoadFuture = _loadData(search: val);
+                                  });
+                                },
+                              );
                             },
                           ),
                         ),
+                        const SizedBox(width: 8),
+                        // Custom Item Button
+                        IconButton.filledTonal(
+                          onPressed: () async {
+                            final nameCtrl = TextEditingController();
+                            final priceCtrl = TextEditingController();
+                            final qtyCtrl = TextEditingController(text: '1');
+                            final formKey = GlobalKey<FormState>();
+
+                            await showDialog(
+                              context: context,
+                              builder: (ctx) => AlertDialog(
+                                title: const Text('Add Custom Item'),
+                                content: Form(
+                                  key: formKey,
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      TextFormField(
+                                        controller: nameCtrl,
+                                        decoration: const InputDecoration(
+                                          labelText: 'Item Name *',
+                                        ),
+                                        validator: (v) =>
+                                            v!.isEmpty ? 'Required' : null,
+                                      ),
+                                      const SizedBox(height: 8),
+                                      Row(
+                                        children: [
+                                          Expanded(
+                                            child: TextFormField(
+                                              controller: priceCtrl,
+                                              decoration: const InputDecoration(
+                                                labelText: 'Price *',
+                                              ),
+                                              keyboardType:
+                                                  TextInputType.number,
+                                              validator: (v) => v!.isEmpty
+                                                  ? 'Required'
+                                                  : null,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Expanded(
+                                            child: TextFormField(
+                                              controller: qtyCtrl,
+                                              decoration: const InputDecoration(
+                                                labelText: 'Qty',
+                                              ),
+                                              keyboardType:
+                                                  TextInputType.number,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () => Navigator.pop(ctx),
+                                    child: const Text('Cancel'),
+                                  ),
+                                  FilledButton(
+                                    onPressed: () {
+                                      if (formKey.currentState!.validate()) {
+                                        final price =
+                                            double.tryParse(priceCtrl.text) ??
+                                            0;
+                                        final qty =
+                                            double.tryParse(qtyCtrl.text) ?? 1;
+
+                                        // Add to Cart
+                                        context.read<SalesProvider>().addItem(
+                                          Product(
+                                            id: -1, // Custom ID
+                                            name: nameCtrl.text,
+                                            sku: 'CUSTOM',
+                                            type: 'retail', // Treat as retail
+                                            baseSellingPrice: price,
+                                          ),
+                                          quantity: qty,
+                                        );
+                                        Navigator.pop(ctx);
+                                      }
+                                    },
+                                    child: const Text('Add'),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                          icon: const Icon(Icons.add_shopping_cart),
+                          tooltip: 'Custom Item',
+                        ),
                       ],
                     ),
+                  ),
+
+                  // Quick Access (Top Selling)
+                  FutureBuilder<List<dynamic>>(
+                    future: _topProductsFuture ?? Future.value([]),
+                    builder: (ctx, snap) {
+                      if (!snap.hasData || snap.data!.isEmpty) {
+                        return const SizedBox.shrink();
+                      }
+
+                      return Container(
+                        height: 50,
+                        margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                        child: ListView.separated(
+                          scrollDirection: Axis.horizontal,
+                          itemCount: snap.data!.take(8).length, // Limit to 8
+                          separatorBuilder: (_, context) =>
+                              const SizedBox(width: 8),
+                          itemBuilder: (context, i) {
+                            final item = snap.data![i];
+                            // item is {product_name, count, ...} - we might need full product?
+                            // Top Products endpoint usually returns basic info.
+                            // If we need full product object to add to cart, we might need to find it in _allProducts.
+                            final pName =
+                                (item['product_name'] ??
+                                        item['name'] ??
+                                        'Unknown Item')
+                                    .toString();
+
+                            return ActionChip(
+                              avatar: const Icon(
+                                Icons.star,
+                                size: 14,
+                                color: Colors.orange,
+                              ),
+                              label: Text(pName),
+                              onPressed: () {
+                                // Find in loaded products
+                                try {
+                                  final product = _allProducts.firstWhere(
+                                    (p) => p.name == pName,
+                                  );
+                                  context.read<SalesProvider>().addItem(
+                                    product,
+                                  );
+                                } catch (_) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text(
+                                        'Item details not found locally',
+                                      ),
+                                      duration: Duration(seconds: 1),
+                                    ),
+                                  );
+                                }
+                              },
+                            );
+                          },
+                        ),
+                      );
+                    },
                   ),
 
                   // Categories
@@ -541,87 +1032,89 @@ class _SalesInvoiceScreenState extends State<SalesInvoiceScreen>
                       ),
                     ],
                   ),
-                  child: Column(
-                    children: [
-                      // Invoice Header: Customer
-                      Padding(
-                        padding: const EdgeInsets.all(16.0),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
+                  child: ClipRRect(
+                    // Added ClipRRect to ensure scrolling doesn't bleed corners
+                    borderRadius: BorderRadius.circular(16),
+                    child: SingleChildScrollView(
+                      // [MODIFIED] Scroll whole panel
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          // Invoice Header: Customer
+                          Padding(
+                            padding: const EdgeInsets.all(16.0),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                const Icon(
-                                  Icons.receipt_long_rounded,
-                                  color: Colors.orange,
+                                Row(
+                                  children: [
+                                    const Icon(
+                                      Icons.receipt_long_rounded,
+                                      color: Colors.orange,
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Text(
+                                      'Current Order',
+                                      style: TextStyle(
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.grey[800],
+                                      ),
+                                    ),
+                                    const Spacer(),
+                                    Text(
+                                      draft.title, // e.g. "Draft 1"
+                                      style: TextStyle(
+                                        color: Colors.grey[500],
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                                const SizedBox(width: 12),
-                                Text(
-                                  'Current Order',
-                                  style: TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.grey[800],
-                                  ),
-                                ),
-                                const Spacer(),
-                                Text(
-                                  draft.title, // e.g. "Draft 1"
-                                  style: TextStyle(
-                                    color: Colors.grey[500],
-                                    fontWeight: FontWeight.w500,
-                                  ),
+                                const SizedBox(height: 16),
+                                CustomerSelector(
+                                  // [FIX] Key on draft ID so it rebuilds when draft is reset
+                                  key: ValueKey(draft.id),
+                                  initialCustomer: draft.customer,
+                                  onCustomerSelected: sales.setCustomer,
                                 ),
                               ],
                             ),
-                            const SizedBox(height: 16),
-                            CustomerSelector(
-                              key: ValueKey(sales.activeTabIndex),
-                              initialCustomer: draft.customer,
-                              onCustomerSelected: sales.setCustomer,
-                            ),
-                          ],
-                        ),
-                      ),
-                      const Divider(height: 1),
-
-                      // Items List
-                      Expanded(
-                        child: SingleChildScrollView(
-                          child: Column(
-                            children: [
-                              InvoiceTable(
-                                draft: draft,
-                                onRemove: sales.removeItem,
-                                onUpdateQty: (i, q) =>
-                                    sales.updateItem(i, quantity: q),
-                                onUpdatePrice: (i, p) =>
-                                    sales.updateItem(i, price: p),
-                                onUpdateDesc: (i, s) =>
-                                    sales.updateItem(i, description: s),
-                                products: _allProducts,
-                                onAdd: (p) => sales.addItem(p),
-                              ),
-                            ],
                           ),
-                        ),
-                      ),
+                          const Divider(height: 1),
 
-                      // Footer (Checkout)
-                      _buildFooter(draft, sales),
-                    ],
+                          // Items List
+                          InvoiceTable(
+                            draft: draft,
+                            products: _allProducts,
+                            onRemove: sales.removeItem,
+                            onUpdateQty: (i, q) =>
+                                sales.updateItem(i, quantity: q),
+                            onUpdatePrice: (i, p) =>
+                                sales.updateItem(i, price: p),
+                            onUpdateDesc: (i, s) =>
+                                sales.updateItem(i, description: s),
+                            onAdd: (p) => sales.addItem(p),
+                          ),
+
+                          // Footer
+                          const Divider(height: 1),
+                          _buildFooter(context, draft, sales),
+                        ],
+                      ),
+                    ),
                   ),
-                );
+                ); // Close Container
               },
             ),
-          ),
+          ), // Close Expanded
         ],
       ),
     );
   }
 
   Widget _buildGrid(String type) {
-    // Filter _allProducts by type
+    // Filter _allProducts by TYPE only (Search is handled by Backend now)
     final filtered = _allProducts.where((p) {
       if (type == 'retail') {
         return p.type == 'retail' || p.type == 'raw_material';
@@ -632,7 +1125,7 @@ class _SalesInvoiceScreenState extends State<SalesInvoiceScreen>
     return GridView.builder(
       padding: const EdgeInsets.all(16),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 4, // More dense grid
+        crossAxisCount: 3, // More dense grid
         childAspectRatio: 0.85,
         crossAxisSpacing: 12,
         mainAxisSpacing: 12,
@@ -704,7 +1197,18 @@ class _SalesInvoiceScreenState extends State<SalesInvoiceScreen>
     );
   }
 
-  Widget _buildFooter(InvoiceDraft draft, SalesProvider sales) {
+  Widget _buildFooter(
+    BuildContext context,
+    InvoiceDraft draft,
+    SalesProvider sales,
+  ) {
+    // [NEW] Sync Mpesa Phone Controller
+    if (draft.mpesaPhone != null && _mpesaPhoneCtrl.text != draft.mpesaPhone) {
+      _mpesaPhoneCtrl.text = draft.mpesaPhone!;
+    } else if (draft.mpesaPhone == null && _mpesaPhoneCtrl.text.isNotEmpty) {
+      _mpesaPhoneCtrl.clear();
+    }
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -715,15 +1219,17 @@ class _SalesInvoiceScreenState extends State<SalesInvoiceScreen>
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Row 1: Totals & Summary
+          // Row 1: Main Controls
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Left: Payment Mode
+              // COL 1: Payment & Debt (Flex 3)
               Expanded(
-                flex: 2,
+                flex: 3,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    // Payment Method
                     const Text(
                       'Payment Method',
                       style: TextStyle(
@@ -732,8 +1238,9 @@ class _SalesInvoiceScreenState extends State<SalesInvoiceScreen>
                         fontWeight: FontWeight.bold,
                       ),
                     ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 4),
                     Container(
+                      height: 38, // [MODIFIED] Compact height
                       padding: const EdgeInsets.symmetric(horizontal: 12),
                       decoration: BoxDecoration(
                         color: Colors.white,
@@ -744,34 +1251,53 @@ class _SalesInvoiceScreenState extends State<SalesInvoiceScreen>
                         child: DropdownButton<String>(
                           value: draft.paymentMode,
                           isExpanded: true,
+                          icon: const Icon(
+                            Icons.keyboard_arrow_down,
+                            size: 20,
+                            color: Colors.grey,
+                          ),
+                          style: const TextStyle(
+                            fontSize: 13, // [MODIFIED] Compact font
+                            color: Colors.black87,
+                          ),
                           items: ['Cash', 'Mpesa', 'Credit']
                               .map(
                                 (m) =>
                                     DropdownMenuItem(value: m, child: Text(m)),
                               )
                               .toList(),
-                          onChanged: (v) => sales.setPaymentMode(v!),
+                          onChanged: (v) {
+                            sales.setPaymentMode(v!);
+                            if (v == 'Credit') {
+                              sales.setAmountTendered(
+                                0,
+                              ); // Credit usually means 0 paid now
+                              sales.toggleIncludeDebt(true);
+                            }
+                          },
                         ),
                       ),
                     ),
 
-                    // Mpesa Details
+                    // M-Pesa Fields
                     if (draft.paymentMode == 'Mpesa') ...[
-                      const SizedBox(height: 8),
+                      const SizedBox(height: 8), // Reduced spacing
                       Row(
                         children: [
                           Expanded(
                             child: SizedBox(
-                              height: 36,
+                              height: 38, // [MODIFIED] Compact height
                               child: TextFormField(
-                                initialValue: draft.mpesaPhone ?? '254',
+                                controller:
+                                    _mpesaPhoneCtrl, // [MODIFIED] Use Ctrl
                                 style: const TextStyle(fontSize: 13),
                                 onChanged: sales.setMpesaPhone,
                                 decoration: InputDecoration(
-                                  hintText: 'Phone',
+                                  labelText: 'Phone',
+                                  isDense: true,
                                   contentPadding: const EdgeInsets.symmetric(
                                     horizontal: 8,
-                                    vertical: 0,
+                                    vertical: 10,
                                   ),
                                   border: OutlineInputBorder(
                                     borderRadius: BorderRadius.circular(8),
@@ -785,15 +1311,16 @@ class _SalesInvoiceScreenState extends State<SalesInvoiceScreen>
                           const SizedBox(width: 8),
                           Expanded(
                             child: SizedBox(
-                              height: 36,
+                              height: 38, // [MODIFIED] Compact height
                               child: TextFormField(
                                 onChanged: sales.setMpesaCode,
                                 style: const TextStyle(fontSize: 13),
                                 decoration: InputDecoration(
-                                  hintText: 'Trans. Code',
+                                  labelText: 'Code',
+                                  isDense: true,
                                   contentPadding: const EdgeInsets.symmetric(
                                     horizontal: 8,
-                                    vertical: 0,
+                                    vertical: 10,
                                   ),
                                   border: OutlineInputBorder(
                                     borderRadius: BorderRadius.circular(8),
@@ -808,7 +1335,8 @@ class _SalesInvoiceScreenState extends State<SalesInvoiceScreen>
                       ),
                     ],
 
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 12), // Reduced spacing
+                    // Amount Received Field
                     const Text(
                       'Amount Received',
                       style: TextStyle(
@@ -818,26 +1346,222 @@ class _SalesInvoiceScreenState extends State<SalesInvoiceScreen>
                       ),
                     ),
                     const SizedBox(height: 4),
-                    PaymentAmountField(
-                      amount: draft.amountTendered,
-                      onChanged: sales.setAmountTendered,
+                    SizedBox(
+                      height: 38, // [MODIFIED] Compact height
+                      width: double.infinity,
+                      child: LiveTextField(
+                        value: draft.amountTendered,
+                        prefix: 'KES ',
+                        onChanged: sales.setAmountTendered,
+                      ),
                     ),
+
+                    const SizedBox(height: 16),
+                    // Customer Debt / Wallet Info
+                    if (draft.customer != null)
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color:
+                              (double.tryParse(
+                                        draft.customer!['current_debt']
+                                            .toString(),
+                                      ) ??
+                                      0) >
+                                  0
+                              ? Colors.red[50]
+                              : Colors.grey[100],
+                          border: Border.all(
+                            color:
+                                (double.tryParse(
+                                          draft.customer!['current_debt']
+                                              .toString(),
+                                        ) ??
+                                        0) >
+                                    0
+                                ? Colors.red[200]!
+                                : Colors.grey[300]!,
+                          ),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Column(
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                const Text(
+                                  'Customer Debt:',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                Text(
+                                  'KES ${double.tryParse(draft.customer!['current_debt'].toString())?.toStringAsFixed(2) ?? "0.00"}',
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.red,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            Row(
+                              children: [
+                                SizedBox(
+                                  height: 24,
+                                  width: 24,
+                                  child: Checkbox(
+                                    value: draft.includeDebt,
+                                    onChanged: (v) =>
+                                        sales.toggleIncludeDebt(v ?? false),
+                                    activeColor: Colors.red,
+                                  ),
+                                ),
+                                const Text(
+                                  ' Include in Total',
+                                  style: TextStyle(fontSize: 12),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
                   ],
                 ),
               ),
+
               const SizedBox(width: 24),
-              // Right: Financials
+
+              // COL 2: Calculations (Flex 4) - Discount, Tax, Totals
               Expanded(
-                flex: 3,
+                flex: 4,
                 child: Column(
                   children: [
+                    // Subtotal
                     _buildSummaryRow('Subtotal', draft.subtotal),
-                    _buildSummaryRow(
-                      'Discount (Manual)',
-                      draft.discountAmount,
-                      isNegative: true,
+
+                    const SizedBox(height: 8),
+                    // Discount Row (Bi-directional)
+                    Row(
+                      children: [
+                        const Expanded(
+                          flex: 2,
+                          child: Text(
+                            'Discount',
+                            style: TextStyle(fontSize: 13, color: Colors.grey),
+                          ),
+                        ),
+                        // Percent Input
+                        Expanded(
+                          flex: 2,
+                          child: LiveTextField(
+                            value: draft.discountRate,
+                            suffix: '%',
+                            onChanged: sales.setDiscountRate,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        const Text('-', style: TextStyle(color: Colors.grey)),
+                        const SizedBox(width: 8),
+                        // Amount Input
+                        Expanded(
+                          flex: 3,
+                          child: LiveTextField(
+                            value: draft.discountAmount,
+                            prefix: 'KES ',
+                            onChanged: sales
+                                .setDiscountAmount, // Need to ensure provider handles calculating rate from this
+                          ),
+                        ),
+                      ],
                     ),
-                    const Divider(height: 16),
+
+                    const SizedBox(height: 8),
+                    // Tax Row
+                    Row(
+                      children: [
+                        const Text(
+                          'Tax (VAT)',
+                          style: TextStyle(fontSize: 13, color: Colors.grey),
+                        ),
+                        const SizedBox(width: 8),
+                        // Type
+                        SizedBox(
+                          height: 30,
+                          width: 80,
+                          child: DropdownButtonHideUnderline(
+                            child: DropdownButton<String>(
+                              value: draft.taxType,
+                              isDense: true,
+                              style: const TextStyle(
+                                fontSize: 11,
+                                color: Colors.blue,
+                              ),
+                              items: ['Exclusive', 'Inclusive']
+                                  .map(
+                                    (t) => DropdownMenuItem(
+                                      value: t,
+                                      child: Text(t),
+                                    ),
+                                  )
+                                  .toList(),
+                              onChanged: (v) => sales.setTaxType(v!),
+                            ),
+                          ),
+                        ),
+                        // Percent Input
+                        Expanded(
+                          flex: 2,
+                          child: LiveTextField(
+                            value: draft.taxRate,
+                            suffix: '%',
+                            onChanged: sales.setTaxRate,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        const Text('=', style: TextStyle(color: Colors.grey)),
+                        const SizedBox(width: 8),
+                        // Amount Display (Read Only)
+                        Expanded(
+                          flex: 3,
+                          child: Container(
+                            height: 36,
+                            alignment: Alignment.centerRight,
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                            child: Text(
+                              'KES ${draft.calculateTax.toStringAsFixed(2)}',
+                              style: const TextStyle(
+                                fontSize: 13,
+                                color: Colors.black54,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+
+                    // Round Off
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        SizedBox(
+                          height: 24,
+                          width: 24,
+                          child: Checkbox(
+                            value: draft.roundOff,
+                            onChanged: (v) => sales.toggleRoundOff(v ?? false),
+                          ),
+                        ),
+                        const Text(
+                          'Round Off',
+                          style: TextStyle(fontSize: 12, color: Colors.grey),
+                        ),
+                      ],
+                    ),
+
+                    const Divider(),
+                    // Total
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
@@ -849,132 +1573,113 @@ class _SalesInvoiceScreenState extends State<SalesInvoiceScreen>
                           ),
                         ),
                         Text(
-                          'KES ${draft.grandTotal.toStringAsFixed(2)}',
+                          'KES ${draft.totalPayable.toStringAsFixed(2)}',
                           style: const TextStyle(
                             fontWeight: FontWeight.bold,
-                            fontSize: 20,
+                            fontSize: 22,
                             color: Colors.deepPurple,
                           ),
                         ),
                       ],
                     ),
+                    const SizedBox(height: 4),
+
+                    // Balance / Change
+                    if (draft.amountTendered > 0 ||
+                        double.tryParse(
+                              draft.customer?['wallet_balance']?.toString() ??
+                                  '0',
+                            )! >
+                            0)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          vertical: 4,
+                          horizontal: 8,
+                        ),
+                        decoration: BoxDecoration(
+                          color: draft.changeDue >= 0
+                              ? Colors.green[50]
+                              : Colors.red[50],
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              draft.changeDue >= 0
+                                  ? 'Change / Balance'
+                                  : 'Balance Due',
+                              style: TextStyle(
+                                color: draft.changeDue >= 0
+                                    ? Colors.green[800]
+                                    : Colors.red[800],
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            Text(
+                              'KES ${draft.changeDue.abs().toStringAsFixed(2)}',
+                              style: TextStyle(
+                                color: draft.changeDue >= 0
+                                    ? Colors.green[800]
+                                    : Colors.red[800],
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+
+                    // Deposit Change Option
+                    if (draft.changeDue > 0 && draft.customer != null)
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          SizedBox(
+                            height: 24,
+                            width: 24,
+                            child: Checkbox(
+                              value: draft.depositChange,
+                              onChanged: (v) =>
+                                  sales.toggleDepositChange(v ?? false),
+                              activeColor: Colors.green,
+                            ),
+                          ),
+                          const Text(
+                            'Deposit to Wallet',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.green,
+                            ),
+                          ),
+                        ],
+                      ),
                   ],
                 ),
               ),
             ],
           ),
+
           const SizedBox(height: 16),
-
-          // Customer Status Bar (Debt / Wallet)
-          if (draft.customer != null)
-            Container(
-              margin: const EdgeInsets.only(bottom: 16),
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: draft.changeDue > 0 ? Colors.green[50] : Colors.red[50],
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                  color: draft.changeDue > 0
-                      ? Colors.green[200]!
-                      : Colors.red[200]!,
-                ),
-              ),
-              child: Row(
-                children: [
-                  Icon(
-                    draft.changeDue > 0
-                        ? Icons.account_balance_wallet
-                        : Icons.warning_amber_rounded,
-                    color: draft.changeDue > 0 ? Colors.green : Colors.red,
-                    size: 20,
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          draft.changeDue > 0
-                              ? (draft.depositChange
-                                    ? 'Depositing Change to Wallet'
-                                    : 'Change Due')
-                              : 'Customer Debt (Projected)',
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.bold,
-                            color: draft.changeDue > 0
-                                ? Colors.green[900]
-                                : Colors.red[900],
-                          ),
-                        ),
-                        Text(
-                          draft.changeDue > 0
-                              ? 'KES ${draft.changeDue.toStringAsFixed(2)}'
-                              : 'KES ${(double.tryParse(draft.customer!['current_debt'].toString()) ?? 0 + draft.grandTotal).toStringAsFixed(2)}', // Rough calc for display
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            color: draft.changeDue > 0
-                                ? Colors.green[800]
-                                : Colors.red[800],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  // Action Checkbox
-                  if (draft.changeDue > 0)
-                    Row(
-                      children: [
-                        Checkbox(
-                          value: draft.depositChange,
-                          activeColor: Colors.green,
-                          onChanged: (v) =>
-                              sales.toggleDepositChange(v ?? false),
-                        ),
-                        const Text(
-                          'Deposit',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ],
-                    )
-                  else
-                    Row(
-                      children: [
-                        Checkbox(
-                          value: draft.includeDebt,
-                          activeColor: Colors.red,
-                          onChanged: (v) => sales.toggleIncludeDebt(v ?? false),
-                        ),
-                        const Text(
-                          'Pay Old Debt',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ],
-                    ),
-                ],
-              ),
-            ),
-
-          // Action Buttons
+          // Row 2: Big Actions
           Row(
             children: [
               Expanded(
                 child: OutlinedButton.icon(
                   onPressed: () => _submitTransaction(isHold: true),
-                  icon: const Icon(Icons.pause, size: 18),
+                  icon: const Icon(Icons.pause, size: 20),
                   label: const Text('HOLD'),
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.orange,
-                    side: const BorderSide(color: Colors.orange),
-                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 16, // [MODIFIED] Compact
+                    ),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
+                    ),
+                    textStyle: const TextStyle(
+                      fontSize: 14, // [MODIFIED] Compact font
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
                 ),
@@ -984,19 +1689,27 @@ class _SalesInvoiceScreenState extends State<SalesInvoiceScreen>
                 flex: 2,
                 child: FilledButton.icon(
                   onPressed: _processPayment,
-                  icon: const Icon(Icons.check_circle_outline),
+                  icon: const Icon(Icons.check_circle_outline, size: 20),
                   label: Text(
-                    'CHARGE KES ${draft.amountTendered > 0 ? draft.amountTendered.toStringAsFixed(2) : draft.grandTotal.toStringAsFixed(2)}',
+                    draft.amountTendered == 0 && draft.totalPayable > 0
+                        ? 'CONFIRM CREDIT SALE'
+                        : (draft.amountTendered > 0 &&
+                              draft.amountTendered <
+                                  (draft.totalPayable - 0.01))
+                        ? 'CHARGE PARTIAL (KES ${draft.amountTendered.toStringAsFixed(2)})'
+                        : 'CHARGE KES ${draft.totalPayable.toStringAsFixed(2)}',
                   ),
                   style: FilledButton.styleFrom(
                     backgroundColor: Colors.deepPurple,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 16, // [MODIFIED] Compact
+                    ),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
                     textStyle: const TextStyle(
+                      fontSize: 16, // [MODIFIED] Compact font
                       fontWeight: FontWeight.bold,
-                      fontSize: 16,
                     ),
                   ),
                 ),
@@ -1056,10 +1769,11 @@ class _PaymentAmountFieldState extends State<PaymentAmountField> {
   @override
   void didUpdateWidget(PaymentAmountField oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // Only update text if the external change is NOT what we just typed.
+    // Only update text if the external change is NOT what we just typed (or if it's a completely new value like 0).
     // Simple check: parse text vs new amount.
     final currentVal = double.tryParse(_controller.text) ?? 0.0;
-    if ((currentVal - widget.amount).abs() > 0.01) {
+    // If the widget amount changed significantly from current text, OR if amount is 0 (reset), update text.
+    if ((currentVal - widget.amount).abs() > 0.01 || widget.amount == 0) {
       _controller.text = widget.amount == 0 ? '' : widget.amount.toString();
     }
   }
@@ -1146,16 +1860,28 @@ class _LiveTextFieldState extends State<LiveTextField> {
     return TextFormField(
       controller: _controller,
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      style: const TextStyle(fontSize: 14), // [MODIFIED] Larger font
+      textAlign: TextAlign.center,
       decoration: InputDecoration(
         suffixText: widget.suffix,
         prefixText: widget.prefix,
+        prefixStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+        suffixStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
         isDense: true,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-        border: const OutlineInputBorder(
-          borderSide: BorderSide(color: Colors.grey),
+        // [MODIFIED] Increased padding for taller fields (~44-48px)
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 8,
+          vertical: 10, // [MODIFIED] Compact padding
+        ),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: const BorderSide(color: Colors.grey),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: BorderSide(color: Colors.grey[300]!),
         ),
       ),
-      textAlign: TextAlign.center,
       onChanged: (v) => widget.onChanged(double.tryParse(v) ?? 0),
     );
   }

@@ -100,8 +100,23 @@ exports.getCustomers = async (req, res) => {
     }
 };
 
+exports.getCustomerById = async (req, res) => {
+    const { id } = req.params;
+    try {
+        const result = await pool.query('SELECT * FROM customers WHERE id = $1', [id]);
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'Customer not found' });
+        }
+        // Alias current_debt to balance if needed, or frontend handles it. 
+        // Let's keep it raw.
+        res.json(result.rows[0]);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
 exports.createCustomer = async (req, res) => {
-    const { name, phone, alt_phone, email, credit_limit, address } = req.body;
+    const { name, phone, alt_phone, email, credit_limit, address, region } = req.body;
 
     if (email && email.trim() !== '' && !isValidEmail(email.trim())) {
         return res.status(400).json({ error: 'Invalid email format' });
@@ -109,14 +124,15 @@ exports.createCustomer = async (req, res) => {
 
     try {
         const result = await pool.query(
-            'INSERT INTO customers (name, phone, alt_phone, email, credit_limit, address, current_debt) VALUES ($1, $2, $3, $4, $5, $6, 0) RETURNING *',
+            'INSERT INTO customers (name, phone, alt_phone, email, credit_limit, address, region, current_debt) VALUES ($1, $2, $3, $4, $5, $6, $7, 0) RETURNING *',
             [
                 name,
                 phone && phone.trim() !== '' ? phone.trim() : null,
                 alt_phone && alt_phone.trim() !== '' ? alt_phone.trim() : null,
                 email && email.trim() !== '' ? email.trim() : null,
                 credit_limit || 0,
-                address
+                address,
+                region
             ]
         );
         res.status(201).json(result.rows[0]);
@@ -130,7 +146,7 @@ exports.createCustomer = async (req, res) => {
 
 exports.updateCustomer = async (req, res) => {
     const { id } = req.params;
-    const { name, phone, alt_phone, email, credit_limit, address } = req.body;
+    const { name, phone, alt_phone, email, credit_limit, address, region } = req.body;
 
     if (email && email.trim() !== '' && !isValidEmail(email.trim())) {
         return res.status(400).json({ error: 'Invalid email format' });
@@ -139,8 +155,8 @@ exports.updateCustomer = async (req, res) => {
     try {
         const result = await pool.query(
             `UPDATE customers 
-             SET name = $1, phone = $2, alt_phone = $3, email = $4, credit_limit = $5, address = $6
-             WHERE id = $7 RETURNING *`,
+             SET name = $1, phone = $2, alt_phone = $3, email = $4, credit_limit = $5, address = $6, region = $7
+             WHERE id = $8 RETURNING *`,
             [
                 name,
                 phone && phone.trim() !== '' ? phone.trim() : null,
@@ -148,6 +164,7 @@ exports.updateCustomer = async (req, res) => {
                 email && email.trim() !== '' ? email.trim() : null,
                 credit_limit,
                 address,
+                region,
                 id
             ]
         );
@@ -198,6 +215,17 @@ exports.addCustomerPayment = async (req, res) => {
     const { amount, method, notes, order_id } = req.body;
     const paymentAmount = parseFloat(amount);
 
+    // [NEW] Get Branch ID
+    const userId = req.user ? req.user.id : null;
+    let branchId = 1;
+
+    if (userId) {
+        const userRes = await pool.query('SELECT branch_id FROM users WHERE id = $1', [userId]);
+        if (userRes.rows.length > 0) {
+            branchId = userRes.rows[0].branch_id || 1;
+        }
+    }
+
     if (isNaN(paymentAmount) || paymentAmount <= 0) {
         return res.status(400).json({ error: 'Invalid payment amount' });
     }
@@ -207,9 +235,9 @@ exports.addCustomerPayment = async (req, res) => {
 
         // 1. Record Payment
         await pool.query(
-            `INSERT INTO customer_payments (customer_id, order_id, amount, method, notes) 
-             VALUES ($1, $2, $3, $4, $5)`,
-            [id, order_id || null, paymentAmount, method, notes]
+            `INSERT INTO customer_payments (customer_id, order_id, amount, method, notes, branch_id) 
+             VALUES ($1, $2, $3, $4, $5, $6)`,
+            [id, order_id || null, paymentAmount, method, notes, branchId]
         );
 
         // 2. Reduce Customer Global Debt
@@ -446,12 +474,32 @@ exports.getPaymentsOut = async (req, res) => {
 
 exports.getAllPayments = async (req, res) => {
     try {
-        const result = await pool.query(
-            `SELECT cp.*, c.name as customer_name 
-             FROM customer_payments cp
-             JOIN customers c ON cp.customer_id = c.id
-             ORDER BY cp.payment_date DESC`
-        );
+        const { startDate, endDate, branchId } = req.query;
+        let query = `
+            SELECT cp.*, c.name as customer_name 
+            FROM customer_payments cp
+            JOIN customers c ON cp.customer_id = c.id
+            WHERE 1=1
+        `;
+        const params = [];
+
+        if (startDate) {
+            params.push(startDate);
+            query += ` AND cp.payment_date >= $${params.length}`;
+        }
+        if (endDate) {
+            params.push(endDate);
+            query += ` AND cp.payment_date <= $${params.length}`;
+        }
+
+        if (branchId) {
+            params.push(branchId);
+            query += ` AND cp.branch_id = $${params.length}`;
+        }
+
+        query += ` ORDER BY cp.payment_date DESC`;
+
+        const result = await pool.query(query, params);
         res.json(result.rows);
     } catch (err) {
         res.status(500).json({ error: err.message });

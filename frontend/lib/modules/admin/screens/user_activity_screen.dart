@@ -1,10 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-
-import 'package:pdf/pdf.dart';
-import 'package:printing/printing.dart';
 import '../../core/services/api_service.dart';
-import '../../reports/services/pdf_report_service.dart';
 
 class UserActivityScreen extends StatefulWidget {
   const UserActivityScreen({super.key});
@@ -15,114 +11,38 @@ class UserActivityScreen extends StatefulWidget {
 
 class _UserActivityScreenState extends State<UserActivityScreen> {
   final ApiService _apiService = ApiService();
-  final PdfReportService _pdfService = PdfReportService();
+  bool _isLoading = true;
+  List<dynamic> _logs = [];
 
-  bool _isLoading = false;
-  List<dynamic> _auditData = [];
-  List<dynamic> _branches = [];
-  int? _selectedBranchId;
+  // Filters
+  String? _selectedAction;
   DateTimeRange? _dateRange;
 
   @override
   void initState() {
     super.initState();
-    _loadInitialData();
+    _fetchLogs();
   }
 
-  Future<void> _loadInitialData() async {
+  Future<void> _fetchLogs() async {
     setState(() => _isLoading = true);
     try {
-      final branches = await _apiService.getBranches();
-      if (mounted) {
-        setState(() {
-          _branches = branches;
-        });
-        _refreshData();
-      }
-    } catch (e) {
-      debugPrint('Error loading init data: $e');
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
-  }
-
-  Future<void> _refreshData() async {
-    setState(() => _isLoading = true);
-    try {
-      String? start = _dateRange?.start.toIso8601String();
-      String? end = _dateRange?.end.toIso8601String();
-
-      final data = await _apiService.getAuditReport(
-        branchId: _selectedBranchId,
-        startDate: start,
-        endDate: end,
+      final logs = await _apiService.getActivityLogs(
+        action: _selectedAction,
+        startDate: _dateRange?.start.toIso8601String(),
+        endDate: _dateRange?.end.toIso8601String(),
       );
-
-      if (mounted) setState(() => _auditData = data);
+      if (mounted) {
+        setState(() => _logs = logs);
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('Error loading activity: $e')));
+        ).showSnackBar(SnackBar(content: Text('Error loading logs: $e')));
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);
-    }
-  }
-
-  Future<void> _exportPdf() async {
-    try {
-      setState(() => _isLoading = true);
-      String dateInfo = _dateRange != null
-          ? '${DateFormat('MMM d').format(_dateRange!.start)} - ${DateFormat('MMM d').format(_dateRange!.end)}'
-          : 'All Time';
-
-      String branchName = 'All Branches';
-      if (_selectedBranchId != null) {
-        final b = _branches.firstWhere(
-          (element) => element['id'] == _selectedBranchId,
-          orElse: () => {'name': 'Unknown'},
-        );
-        branchName = b['name'];
-      }
-
-      final pdfData = await _pdfService.generateAuditReport(
-        _auditData,
-        branchName,
-        dateInfo,
-      );
-
-      await Printing.layoutPdf(
-        onLayout: (PdfPageFormat format) async => pdfData,
-        name: 'user_activity_report.pdf',
-      );
-
-      if (mounted) setState(() => _isLoading = false);
-    } catch (e) {
-      debugPrint('Export Error: $e');
-      if (mounted) {
-        setState(() => _isLoading = false);
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Export Failed: $e')));
-      }
-    }
-  }
-
-  Color _getTypeColor(String type) {
-    switch (type.toLowerCase()) {
-      case 'adjustment':
-        return Colors.orange;
-      case 'transfer_out':
-        return Colors.blue;
-      case 'transfer_in':
-        return Colors.green;
-      case 'sale':
-        return Colors.purple;
-      case 'receive':
-        return Colors.teal;
-      default:
-        return Colors.grey;
     }
   }
 
@@ -132,61 +52,48 @@ class _UserActivityScreenState extends State<UserActivityScreen> {
       appBar: AppBar(
         title: const Text('User Activity Logs'),
         actions: [
-          IconButton(icon: const Icon(Icons.refresh), onPressed: _refreshData),
-          IconButton(
-            icon: const Icon(Icons.picture_as_pdf),
-            tooltip: 'Export Log',
-            onPressed: _exportPdf,
-          ),
-          const SizedBox(width: 16),
+          IconButton(icon: const Icon(Icons.refresh), onPressed: _fetchLogs),
         ],
       ),
       body: Column(
         children: [
           // Filters
           Container(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.all(16.0),
             color: Colors.white,
             child: Row(
               children: [
-                Expanded(
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    decoration: BoxDecoration(
-                      border: Border.all(
-                        color: Colors.black54,
-                      ), // Matches OutlineInputBorder default roughly
-                      borderRadius: BorderRadius.circular(4),
+                DropdownButton<String>(
+                  value: _selectedAction,
+                  hint: const Text('Filter by Action'),
+                  items: const [
+                    DropdownMenuItem(value: null, child: Text('All Actions')),
+                    DropdownMenuItem(
+                      value: 'SALE_CREATED',
+                      child: Text('Sale Created'),
                     ),
-                    child: DropdownButtonHideUnderline(
-                      child: DropdownButton<int>(
-                        value: _selectedBranchId,
-                        hint: const Text('Filter by Branch'),
-                        isExpanded: true,
-                        items: [
-                          const DropdownMenuItem<int>(
-                            value: null,
-                            child: Text('All Branches'),
-                          ),
-                          ..._branches.map((b) {
-                            return DropdownMenuItem<int>(
-                              value: b['id'],
-                              child: Text(b['name']),
-                            );
-                          }),
-                        ],
-                        onChanged: (val) {
-                          setState(() => _selectedBranchId = val);
-                          _refreshData();
-                        },
-                      ),
+                    DropdownMenuItem(
+                      value: 'SALE_UPDATED',
+                      child: Text('Sale Updated'),
                     ),
-                  ),
+                    DropdownMenuItem(
+                      value: 'DISPATCH_UPDATED',
+                      child: Text('Dispatch Updated'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'USER_LOGIN',
+                      child: Text('User Login'),
+                    ),
+                  ],
+                  onChanged: (val) {
+                    setState(() => _selectedAction = val);
+                    _fetchLogs();
+                  },
                 ),
                 const SizedBox(width: 16),
                 ElevatedButton.icon(
                   icon: const Icon(Icons.calendar_today),
-                  label: Text(_dateRange == null ? 'All Time' : 'Custom Check'),
+                  label: Text(_dateRange == null ? 'All Time' : 'Custom Range'),
                   onPressed: () async {
                     final picked = await showDateRangePicker(
                       context: context,
@@ -196,7 +103,7 @@ class _UserActivityScreenState extends State<UserActivityScreen> {
                     );
                     if (picked != null) {
                       setState(() => _dateRange = picked);
-                      _refreshData();
+                      _fetchLogs();
                     }
                   },
                 ),
@@ -205,121 +112,90 @@ class _UserActivityScreenState extends State<UserActivityScreen> {
                     icon: const Icon(Icons.clear),
                     onPressed: () {
                       setState(() => _dateRange = null);
-                      _refreshData();
+                      _fetchLogs();
                     },
                   ),
               ],
             ),
           ),
           const Divider(height: 1),
-
           Expanded(
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
-                : _auditData.isEmpty
+                : _logs.isEmpty
                 ? const Center(child: Text('No activity found.'))
-                : SingleChildScrollView(
-                    scrollDirection: Axis.vertical,
-                    child: SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: DataTable(
-                        headingRowColor: WidgetStateProperty.all(
-                          Colors.grey[50],
+                : ListView.builder(
+                    itemCount: _logs.length,
+                    itemBuilder: (context, index) {
+                      final log = _logs[index];
+                      final details = log['details'] ?? {};
+                      return Card(
+                        margin: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 8,
                         ),
-                        columns: const [
-                          DataColumn(
-                            label: Text(
-                              'Date',
-                              style: TextStyle(fontWeight: FontWeight.bold),
+                        child: ListTile(
+                          leading: CircleAvatar(
+                            backgroundColor: Colors.blue[50],
+                            child: Icon(
+                              _getIconForAction(log['action']),
+                              color: Colors.blue[900],
                             ),
                           ),
-                          DataColumn(
-                            label: Text(
-                              'Branch',
-                              style: TextStyle(fontWeight: FontWeight.bold),
-                            ),
+                          title: Text(
+                            '${log['username'] ?? 'Unknown'} - ${log['action']}',
+                            style: const TextStyle(fontWeight: FontWeight.bold),
                           ),
-                          DataColumn(
-                            label: Text(
-                              'Product',
-                              style: TextStyle(fontWeight: FontWeight.bold),
-                            ),
-                          ),
-                          DataColumn(
-                            label: Text(
-                              'Type',
-                              style: TextStyle(fontWeight: FontWeight.bold),
-                            ),
-                          ),
-                          DataColumn(
-                            label: Text(
-                              'Qty',
-                              style: TextStyle(fontWeight: FontWeight.bold),
-                            ),
-                          ),
-                          DataColumn(
-                            label: Text(
-                              'Reason',
-                              style: TextStyle(fontWeight: FontWeight.bold),
-                            ),
-                          ),
-                        ],
-                        rows: _auditData.map((item) {
-                          final qty =
-                              double.tryParse(item['quantity'].toString()) ?? 0;
-                          final isNeg = qty < 0;
-                          return DataRow(
-                            cells: [
-                              DataCell(
+                          subtitle: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const SizedBox(height: 4),
+                              Text(
+                                DateFormat(
+                                  'yyyy-MM-dd HH:mm',
+                                ).format(DateTime.parse(log['created_at'])),
+                                style: TextStyle(
+                                  color: Colors.grey[600],
+                                  fontSize: 12,
+                                ),
+                              ),
+                              if (log['entity_id'] != null &&
+                                  log['entity_id'] != 'null')
+                                Text('Entity ID: ${log['entity_id']}'),
+                              if (details.toString() != '{}')
                                 Text(
-                                  DateFormat(
-                                    'MMM d, HH:mm',
-                                  ).format(DateTime.parse(item['created_at'])),
+                                  'Details: $details',
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey,
+                                  ),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
                                 ),
-                              ),
-                              DataCell(Text(item['branch_name'] ?? 'Unknown')),
-                              DataCell(Text(item['product_name'] ?? '-')),
-                              DataCell(
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 8,
-                                    vertical: 2,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: _getTypeColor(
-                                      item['type'],
-                                    ).withValues(alpha: 0.1),
-                                    borderRadius: BorderRadius.circular(4),
-                                  ),
-                                  child: Text(
-                                    item['type'].toString().toUpperCase(),
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 11,
-                                      color: _getTypeColor(item['type']),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              DataCell(
-                                Text(
-                                  item['quantity'].toString(),
-                                  style: TextStyle(
-                                    color: isNeg ? Colors.red : Colors.green,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ),
-                              DataCell(Text(item['reason'] ?? '')),
                             ],
-                          );
-                        }).toList(),
-                      ),
-                    ),
+                          ),
+                        ),
+                      );
+                    },
                   ),
           ),
         ],
       ),
     );
+  }
+
+  IconData _getIconForAction(String action) {
+    switch (action) {
+      case 'SALE_CREATED':
+        return Icons.shopping_cart;
+      case 'SALE_UPDATED':
+        return Icons.edit_note;
+      case 'DISPATCH_UPDATED':
+        return Icons.local_shipping;
+      case 'USER_LOGIN':
+        return Icons.login;
+      default:
+        return Icons.info_outline;
+    }
   }
 }

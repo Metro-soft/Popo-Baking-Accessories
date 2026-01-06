@@ -58,7 +58,14 @@ class _CustomersTabState extends State<CustomersTab> {
     setState(() => _isLoadingTransactions = true);
     try {
       final data = await _apiService.getCustomerStatement(customerId);
-      setState(() => _transactions = data['transactions'] ?? []);
+      final allTransactions = data['transactions'] as List? ?? [];
+      // Filter out 'voided' orders to avoid duplicates/confusion
+      setState(() {
+        _transactions = allTransactions.where((t) {
+          final status = t['status']?.toString().toLowerCase();
+          return status != 'voided';
+        }).toList();
+      });
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -740,8 +747,7 @@ class _CustomersTabState extends State<CustomersTab> {
                                             const SizedBox(width: 4),
                                             Expanded(
                                               child: Text(
-                                                _selectedCustomer!['address'] ??
-                                                    'No Address',
+                                                '${_selectedCustomer!['region'] ?? ''} - ${_selectedCustomer!['address'] ?? 'No Address'}',
                                                 style: TextStyle(
                                                   color: Colors.grey[600],
                                                 ),

@@ -71,6 +71,108 @@ class _CustomerSelectorState extends State<CustomerSelector> {
     return Colors.green;
   }
 
+  Future<void> _showAddCustomerDialog() async {
+    final nameCtrl = TextEditingController();
+    final phoneCtrl = TextEditingController();
+    final landmarkCtrl = TextEditingController(); // [NEW]
+    final formKey = GlobalKey<FormState>();
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('New Customer'),
+        content: Form(
+          key: formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextFormField(
+                controller: nameCtrl,
+                decoration: const InputDecoration(labelText: 'Name *'),
+                validator: (v) => v!.isEmpty ? 'Name is required' : null,
+              ),
+              TextFormField(
+                controller: phoneCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Phone (Optional)',
+                ),
+                keyboardType: TextInputType.phone,
+              ),
+              TextFormField(
+                controller: landmarkCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Delivery Landmark (Optional)',
+                  helperText: 'e.g. Shell Station',
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              if (formKey.currentState!.validate()) {
+                try {
+                  Navigator.pop(ctx); // Close dialog first
+                  // Show loading or just wait
+                  setState(() => _isLoading = true);
+
+                  await _apiService.createCustomer({
+                    'name': nameCtrl.text,
+                    'phone': phoneCtrl.text,
+                    'email': '',
+                    'deliveryLandmark': landmarkCtrl.text, // [NEW]
+                    'credit_limit': 0,
+                  });
+
+                  // Reload and Select (Heuristic: select the one we just made)
+                  // For simplicity, we reload all and find by name/phone match or just select last?
+                  // Best to have createCustomer return the object.
+                  // Current API createCustomer returns void.
+                  // So we reload and search for it.
+
+                  await _loadCustomers();
+                  final newCustomer = _allCustomers.firstWhere(
+                    (c) =>
+                        c['name'] == nameCtrl.text &&
+                        c['phone'] == phoneCtrl.text,
+                    orElse: () => null,
+                  );
+
+                  if (newCustomer != null) {
+                    setState(() {
+                      _selectedCustomer = newCustomer;
+                      widget.onCustomerSelected(newCustomer);
+                      _searchCtrl.clear();
+                    });
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Customer Created!')),
+                      );
+                    }
+                  }
+                } catch (e) {
+                  if (mounted) {
+                    ScaffoldMessenger.of(
+                      context,
+                    ).showSnackBar(SnackBar(content: Text('Failed: $e')));
+                  }
+                } finally {
+                  if (mounted) setState(() => _isLoading = false);
+                }
+              }
+            },
+            child: const Text('Create'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_selectedCustomer != null) {
@@ -111,20 +213,32 @@ class _CustomerSelectorState extends State<CustomerSelector> {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        TextField(
-          controller: _searchCtrl,
-          decoration: InputDecoration(
-            labelText: 'Search Customer (Name/Phone)',
-            prefixIcon: const Icon(Icons.search),
-            border: const OutlineInputBorder(),
-            suffixIcon: _isLoading
-                ? const Padding(
-                    padding: EdgeInsets.all(8.0),
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : null,
-          ),
-          onChanged: _filter,
+        Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _searchCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Search Customer (Name/Phone)',
+                  prefixIcon: const Icon(Icons.search),
+                  border: const OutlineInputBorder(),
+                  suffixIcon: _isLoading
+                      ? const Padding(
+                          padding: EdgeInsets.all(8.0),
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : null,
+                ),
+                onChanged: _filter,
+              ),
+            ),
+            const SizedBox(width: 8),
+            IconButton.filled(
+              onPressed: _showAddCustomerDialog,
+              icon: const Icon(Icons.person_add),
+              tooltip: 'New Customer',
+            ),
+          ],
         ),
         if (_searchCtrl.text.isNotEmpty && _selectedCustomer == null)
           Container(

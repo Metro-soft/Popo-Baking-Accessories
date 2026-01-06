@@ -13,8 +13,8 @@ exports.createCustomer = async (req, res) => {
     const { name, phone, creditLimit } = req.body;
     try {
         const result = await db.query(
-            'INSERT INTO customers (name, phone, credit_limit) VALUES ($1, $2, $3) RETURNING *',
-            [name, phone, creditLimit || 5000.00]
+            'INSERT INTO customers (name, phone, credit_limit, delivery_landmark) VALUES ($1, $2, $3, $4) RETURNING *',
+            [name, phone, creditLimit || 5000.00, req.body.deliveryLandmark || '']
         );
         res.status(201).json(result.rows[0]);
     } catch (err) {

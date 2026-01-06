@@ -4,6 +4,11 @@ const partnersController = require('./partners.controller');
 // Auth is handled in app.js via app.use('/api/partners', authenticateToken, ...)
 // router.use(verifyToken);
 
+router.use((req, res, next) => {
+    console.log(`[Partners Router] ${req.method} ${req.url}`);
+    next();
+});
+
 // Suppliers
 router.get('/suppliers', partnersController.getSuppliers);
 router.post('/suppliers', partnersController.createSupplier);
@@ -13,6 +18,7 @@ router.get('/suppliers/:id/transactions', partnersController.getSupplierTransact
 
 // Customers
 router.get('/customers', partnersController.getCustomers);
+router.get('/customers/:id', partnersController.getCustomerById);
 router.post('/customers', partnersController.createCustomer);
 router.put('/customers/:id', partnersController.updateCustomer);
 router.delete('/customers/:id', partnersController.deleteCustomer);

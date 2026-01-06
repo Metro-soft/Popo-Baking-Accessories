@@ -172,3 +172,45 @@ exports.getLowStockReport = async (req, res) => {
         res.status(500).json({ error: 'Failed to generate low stock report' });
     }
 };
+
+// 5. Tax Report [NEW]
+exports.getTaxReport = async (req, res) => {
+    try {
+        const { branchId, startDate, endDate } = req.query;
+
+        let query = `
+            SELECT 
+                l.name as branch_name,
+                COUNT(o.id) as total_txns,
+                SUM(o.total_amount) as total_revenue,
+                SUM(COALESCE(o.tax_amount, 0)) as total_tax,
+                SUM(o.total_amount - COALESCE(o.tax_amount, 0)) as net_revenue
+            FROM orders o
+            LEFT JOIN locations l ON o.branch_id = l.id
+            WHERE o.status = 'completed'
+        `;
+
+        const params = [];
+        let paramIndex = 1;
+
+        if (branchId) {
+            query += ` AND o.branch_id = $${paramIndex}`;
+            params.push(branchId);
+            paramIndex++;
+        }
+
+        if (startDate && endDate) {
+            query += ` AND o.created_at BETWEEN $${paramIndex} AND $${paramIndex + 1}`;
+            params.push(startDate, endDate);
+            paramIndex += 2;
+        }
+
+        query += ` GROUP BY o.branch_id, l.name`;
+
+        const result = await db.query(query, params);
+        res.json(result.rows);
+    } catch (err) {
+        console.error('Tax Report Error:', err);
+        res.status(500).json({ error: 'Failed to generate tax report' });
+    }
+};

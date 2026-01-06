@@ -11,6 +11,7 @@ import '../../inventory/screens/stock_take_screen.dart';
 import '../../sales/screens/pos/pos_screen.dart';
 import '../../sales/screens/sales/invoice_list_screen.dart';
 import '../../sales/screens/sales/payments_in_screen.dart';
+import '../../sales/screens/estimates/estimates_screen.dart'; // [NEW] Estimates
 import '../../sales/screens/logistics/dispatch_screen.dart';
 // Finance import verified
 import '../../finance/screens/cash_management_screen.dart';
@@ -21,6 +22,7 @@ import '../../reports/screens/reports_hub_screen.dart';
 import '../../admin/screens/user_activity_screen.dart';
 import '../../partners/screens/partners_screen.dart';
 import '../../settings/screens/settings_screen.dart';
+import '../../utilities/screens/recycle_bin_screen.dart';
 
 class MainLayout extends StatefulWidget {
   const MainLayout({super.key});
@@ -58,7 +60,7 @@ class _MainLayoutState extends State<MainLayout> {
       case 'payments_in':
         return const PaymentsInScreen();
       case 'estimates':
-        return const PlaceholderScreen(title: 'Estimates / Quotations');
+        return const EstimatesScreen();
       case 'dispatch':
         return const DispatchScreen();
 
@@ -102,6 +104,8 @@ class _MainLayoutState extends State<MainLayout> {
         return const PlaceholderScreen(title: 'Backups / Restore');
       case 'utilities':
         return const PlaceholderScreen(title: 'Utilities');
+      case 'recycle_bin':
+        return const RecycleBinScreen();
       case 'online_store':
         return const PlaceholderScreen(title: 'My Online Store Integration');
 
@@ -202,6 +206,10 @@ class _MainLayoutState extends State<MainLayout> {
                                   'stock_take',
                                 ),
                                 _buildSubMenuItem(
+                                  'Stock Take (Audit)',
+                                  'stock_take',
+                                ),
+                                _buildSubMenuItem(
                                   'Branch Management',
                                   'manage_branches',
                                 ),
@@ -290,11 +298,9 @@ class _MainLayoutState extends State<MainLayout> {
                               Icons.backup_outlined,
                               'backups',
                             ),
-                            _buildMenuItem(
-                              'Utilities',
-                              Icons.build,
-                              'utilities',
-                            ),
+                            _buildExpansionMenu('Utilities', Icons.build, [
+                              _buildSubMenuItem('Recycle Bin', 'recycle_bin'),
+                            ]),
                             _buildMenuItem(
                               'Online Store',
                               Icons.shopping_bag_outlined,
@@ -479,6 +485,13 @@ class _MainLayoutState extends State<MainLayout> {
                           'reports_hub',
                           isMobile: true,
                         ),
+                        _buildExpansionMenu('Utilities', Icons.build, [
+                          _buildSubMenuItem(
+                            'Recycle Bin',
+                            'recycle_bin',
+                            isMobile: true,
+                          ),
+                        ]),
                       ],
                     ),
                   ),
