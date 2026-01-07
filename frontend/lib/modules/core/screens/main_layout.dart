@@ -23,6 +23,8 @@ import '../../admin/screens/user_activity_screen.dart';
 import '../../partners/screens/partners_screen.dart';
 import '../../settings/screens/settings_screen.dart';
 import '../../utilities/screens/recycle_bin_screen.dart';
+import '../../purchases/screens/purchase_bills_screen.dart'; // [NEW]
+import '../../purchases/screens/payments_out_screen.dart';
 
 class MainLayout extends StatefulWidget {
   const MainLayout({super.key});
@@ -66,9 +68,9 @@ class _MainLayoutState extends State<MainLayout> {
 
       // Purchases
       case 'purchase_bills':
-        return const PlaceholderScreen(title: 'Purchase Bills');
+        return const PurchaseBillsScreen();
       case 'payments_out':
-        return const PlaceholderScreen(title: 'Payments Out');
+        return const PaymentsOutScreen();
       case 'purchase_orders':
         return const ReceiveStockScreen();
       case 'stock_adjustment':

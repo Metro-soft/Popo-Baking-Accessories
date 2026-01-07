@@ -271,9 +271,7 @@ class ApiService {
       headers: _headers,
       body: jsonEncode(payload),
     );
-    if (response.statusCode != 200 && response.statusCode != 201) {
-      throw Exception('Failed to receive stock: ${response.body}');
-    }
+    _handleError(response, defaultMessage: 'Failed to receive stock');
   }
 
   Future<void> closeShift(int drawerId, double actualCash, String notes) async {
@@ -443,6 +441,28 @@ class ApiService {
     return response as List<dynamic>;
   }
 
+  // --- Purchases (Bills) ---
+  Future<List<dynamic>> getPurchaseBills({
+    int? supplierId,
+    String? status,
+  }) async {
+    String query = '';
+    final params = <String>[];
+    if (supplierId != null) params.add('supplierId=$supplierId');
+    if (status != null) params.add('status=$status');
+
+    if (params.isNotEmpty) query = '?${params.join('&')}';
+
+    final response = await _get('/purchases/bills$query');
+    _handleError(response, defaultMessage: 'Failed to load purchase bills');
+    return jsonDecode(response.body) as List<dynamic>;
+  }
+
+  Future<void> recordSupplierPayment(Map<String, dynamic> data) async {
+    final response = await _post('/purchases/payments', data);
+    _handleError(response, defaultMessage: 'Failed to record payment');
+  }
+
   // --- Cash Management ---
   Future<Map<String, dynamic>> getCashStatus({int? branchId}) async {
     final response = await http.get(
@@ -520,6 +540,15 @@ class ApiService {
   }
 
   // --- Sales & Invoices ---
+  Future<List<dynamic>> getPaymentsOut() async {
+    final response = await _get('/partners/payments-out'); // Correct Endpoint
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    } else {
+      throw Exception('Failed to load payments out');
+    }
+  }
+
   Future<List<dynamic>> getSalesHistory() async {
     final response = await http.get(
       Uri.parse('$baseUrl/sales/history'),

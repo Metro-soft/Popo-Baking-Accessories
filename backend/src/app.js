@@ -39,7 +39,8 @@ const dispatchRoutes = require('./modules/sales/dispatch.routes');
 const reportsRoutes = require('./modules/reports/reports.routes');
 const partnerRoutes = require('./modules/partners/partners.routes');
 const settingsRoutes = require('./modules/core/settings.routes');
-const activityRoutes = require('./modules/core/activity.routes'); // Activity Logs
+const activityRoutes = require('./modules/core/activity.routes');
+const purchasesRoutes = require('./modules/purchases/purchases.routes'); // Purchase Bills
 
 const { authenticateToken } = require('./middleware/auth.middleware');
 
@@ -56,6 +57,7 @@ app.use('/api/auth', authRoutes); // Login/Register
 app.use('/api/upload', authenticateToken, uploadRoutes);
 app.use('/api/products', authenticateToken, productRoutes);
 app.use('/api/inventory', authenticateToken, inventoryRoutes);
+app.use('/api/purchases', authenticateToken, purchasesRoutes); // Purchase Bills
 // app.use('/api/suppliers', authenticateToken, supplierRoutes); // Moved to partners
 app.use('/api/sales', authenticateToken, salesRoutes);
 app.use('/api/estimates', authenticateToken, estimatesRoutes);

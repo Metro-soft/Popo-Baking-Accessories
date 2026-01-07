@@ -1,7 +1,7 @@
 const db = require('../../config/db');
 
 exports.receiveStock = async (req, res) => {
-    const { supplierId, transportCost, packagingCost, items, branchId } = req.body;
+    const { supplierId, transportCost, packagingCost, items, branchId, referenceNo, dueDate } = req.body;
 
     // 1. Validation
     if (!items || !Array.isArray(items) || items.length === 0) {
@@ -42,10 +42,10 @@ exports.receiveStock = async (req, res) => {
         // 3. Create Purchase Order
         const poResult = await client.query(
             `INSERT INTO purchase_orders 
-            (supplier_id, total_product_cost, transport_cost, packaging_cost, status, branch_id) 
-            VALUES ($1, $2, $3, $4, 'received', $5) 
+            (supplier_id, total_product_cost, transport_cost, packaging_cost, status, branch_id, reference_no, due_date, payment_status) 
+            VALUES ($1, $2, $3, $4, 'received', $5, $6, $7, 'unpaid') 
             RETURNING id`,
-            [supplierId, totalProductValue, tCost, pCost, targetBranchId]
+            [supplierId, totalProductValue, tCost, pCost, targetBranchId, referenceNo, dueDate]
         );
         const poId = poResult.rows[0].id;
 

@@ -35,9 +35,11 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
       );
       setState(() => _logs = logs);
     } catch (e) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Error loading logs: $e')));
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error loading logs: $e')));
+      }
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
