@@ -27,7 +27,13 @@ const AuthController = {
 
             // Generate Token
             const token = jwt.sign(
-                { userId: user.id, email: user.email, role: user.role, branchId: user.branch_id },
+                {
+                    userId: user.id,
+                    email: user.email,
+                    role: user.role,
+                    branchId: user.branch_id,
+                    name: user.full_name || user.username // Standard "name" claim
+                },
                 JWT_SECRET,
                 { expiresIn: '12h' }
             );
@@ -40,7 +46,12 @@ const AuthController = {
             res.json({
                 message: 'Login successful',
                 token,
-                user: { id: user.id, username: user.username, role: user.role }
+                user: {
+                    id: user.id,
+                    username: user.username,
+                    full_name: user.full_name,
+                    role: user.role
+                }
             });
 
         } catch (error) {
